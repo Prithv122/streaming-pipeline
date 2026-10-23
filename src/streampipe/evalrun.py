@@ -215,8 +215,12 @@ def _finite_or_none(x: float) -> float | None:
     return x if math.isfinite(x) else None
 
 
+_P95 = "first_emit_latency_p95"
+
+
 CHECK_COLUMNS = (
     "family",
+    "quantity",
     "late_share",
     "max_delay_s",
     "lateness_s",
@@ -224,11 +228,15 @@ CHECK_COLUMNS = (
     "observed",
     "predicted",
     "tolerance",
+    "accept_lo",
+    "accept_hi",
     "diff",
     "passed",
     "note",
 )
-FAMILIES = ("p1", "p1_mode_invariant", "p2", "p3_wait", "p3_revise")
+FAMILIES = ("p0", "p1", "mode_invariant", "p2", "p3_wait", "p3_revise", "p4")
+# A wait row and the revise row of the same cell must agree on these counts exactly.
+INVARIANT_QUANTITIES = ("n_dropped", "n_exact_final_live", "n_windows_live")
 
 Cell = tuple[float, float, float]
 
@@ -241,12 +249,14 @@ def _check(
     predicted: float,
     tolerance: float,
     note: str = "",
+    quantity: str = "",
 ) -> dict[str, Any]:
     """One check row. A missing or non-finite value fails; `diff <= tolerance` is inclusive."""
     finite = all(math.isfinite(v) for v in (observed, predicted, tolerance))
     diff = abs(observed - predicted) if finite else math.nan
     return {
         "family": family,
+        "quantity": quantity,
         "late_share": cell[0],
         "max_delay_s": cell[1],
         "lateness_s": cell[2],
@@ -254,15 +264,40 @@ def _check(
         "observed": _finite_or_none(observed),
         "predicted": _finite_or_none(predicted),
         "tolerance": _finite_or_none(tolerance),
+        "accept_lo": None,
+        "accept_hi": None,
         "diff": _finite_or_none(diff),
         "passed": bool(finite and diff <= tolerance),
         "note": note or ("" if finite else "non-finite value"),
     }
 
 
-def _failed(family: str, cell: Cell, mode: str, note: str, tolerance: float = math.nan) -> dict:
+def _region_check(
+    family: str,
+    quantity: str,
+    cell: Cell,
+    mode: str,
+    observed: float,
+    expected: float,
+    lo: float,
+    hi: float,
+    note: str = "",
+) -> dict[str, Any]:
+    """A count check: passes iff `lo <= observed <= hi` (both bounds inclusive) and no note."""
+    finite = all(math.isfinite(v) for v in (observed, expected, lo, hi))
+    row = _check(family, cell, mode, observed, expected, math.nan, note, quantity)
+    row["accept_lo"] = _finite_or_none(lo)
+    row["accept_hi"] = _finite_or_none(hi)
+    row["passed"] = bool(finite and not note and lo <= observed <= hi)
+    row["note"] = note or ("" if finite else "non-finite value")
+    return row
+
+
+def _failed(
+    family: str, cell: Cell, mode: str, note: str, tolerance: float = math.nan, quantity: str = ""
+) -> dict:
     """A check that could not be evaluated: it fails."""
-    return _check(family, cell, mode, math.nan, math.nan, tolerance, note)
+    return _check(family, cell, mode, math.nan, math.nan, tolerance, note, quantity)
 
 
 def _missing(row: dict[str, Any] | None, pred: dict[str, Any] | None) -> str:
@@ -286,6 +321,30 @@ def _index_predictions(
     return out
 
 
+def _count_region_check(
+    family: str,
+    quantity: str,
+    cell: Cell,
+    mode: str,
+    row: dict[str, Any],
+    pred: dict[str, Any],
+    denominator_key: str,
+) -> dict[str, Any]:
+    """Pooled exact count X (`quantity`) against the predicted region, denominator first.
+
+    The model's statistic is a count out of `n_expected` windows x seeds x zones. If the run
+    observed a different number of such windows, the count is not comparable and the check fails.
+    """
+    count, den = _num(row.get(quantity)), _num(row.get(denominator_key))
+    n_expected = _num(pred.get("n_expected"))
+    expected = _num(pred.get("pi")) * n_expected
+    lo, hi = _num(pred.get("accept_lo")), _num(pred.get("accept_hi"))
+    note = ""
+    if den != n_expected:
+        note = f"denominator mismatch: observed {den:g}, expected {n_expected:g}"
+    return _region_check(family, quantity, cell, mode, count, expected, lo, hi, note)
+
+
 def evaluate_predictions(
     pooled: Sequence[dict[str, Any]],
     predictions: dict[str, Any],
@@ -293,90 +352,137 @@ def evaluate_predictions(
 ) -> dict[str, Any]:
     """Check the pooled sweep against the analytic predictions (ANALYTIC.md, section 6).
 
-    Families: `p1` (late-drop counts, wait rows), `p1_mode_invariant` (revise drops equal wait
-    drops), `p2` (revise first-answer exactness at every L), `p3_wait` and `p3_revise` (first-emit
-    latency p95, revise at every L). A missing observed cell, a missing prediction or a non-finite
-    value is a failed check, never skipped. With `grid` the expected cells are its axes; without
-    it, the cells present in the predictions or the pooled table. `primary_passed` is true iff
-    there is at least one check and every check passes.
+    Families: `p0` (event count, wait rows at L = 0), `p1` (late-drop counts, wait rows),
+    `mode_invariant` (revise drops, final-exact count and live-window count equal wait's, at
+    every cell), `p2` (revise first-answer exact count inside its region, every L), `p3_wait` and
+    `p3_revise` (first-emit latency p95, revise at every L), `p4` (wait final-exact count inside
+    its region). A count outside its region, or over a different number of windows than
+    predicted, fails. A missing observed cell, a missing prediction or a non-finite value is a
+    failed check, never skipped. With `grid` the expected cells are its axes; without it, the
+    cells present in the predictions or the pooled table. `primary_passed` is true iff there is
+    at least one check and every check passes.
     """
     obs = {
         (p["mode"], float(p["late_share"]), float(p["max_delay_s"]), float(p["lateness_s"])): p
         for p in pooled
     }
+    p0 = predictions.get("p0_events")
     p1 = _index_predictions(predictions.get("p1_drop_rate", []), "p1_drop_rate", True)
     p2 = _index_predictions(predictions.get("p2_first_exact", []), "p2_first_exact", False)
     p3 = predictions.get("p3_first_latency", [])
     p3_wait = _index_predictions([r for r in p3 if r["mode"] == "wait"], "p3 wait", True)
     p3_revise = _index_predictions([r for r in p3 if r["mode"] == "revise"], "p3 revise", False)
+    p4 = _index_predictions(predictions.get("p4_final_exact", []), "p4_final_exact", True)
 
     p1_cells: list[Cell]
     wait_cells: list[Cell]
+    p4_cells: list[Cell]
+    pairs_p0: list[tuple[float, float]]
     if grid is not None:
         pairs = [(float(s), float(d)) for s in grid.late_shares for d in grid.max_delays]
         lateness_axis = [float(x) for x in grid.lateness]
-        p1_cells = wait_cells = [(s, d, x) for s, d in pairs for x in lateness_axis]
-        pairs_p2 = pairs_p3 = pairs
+        p1_cells = wait_cells = p4_cells = [(s, d, x) for s, d in pairs for x in lateness_axis]
+        pairs_p0 = pairs_p2 = pairs_p3 = pairs
     else:
         lateness_axis = sorted({k[3] for k in obs})
         wait_obs = {k[1:] for k in obs if k[0] == "wait"}
         revise_pairs = {k[1:3] for k in obs if k[0] == "revise"}
         p1_cells = sorted(set(p1) | wait_obs)  # type: ignore[arg-type]
         wait_cells = sorted(set(p3_wait) | wait_obs)  # type: ignore[arg-type]
+        p4_cells = sorted(set(p4) | wait_obs)  # type: ignore[arg-type]
         pairs_p2 = sorted(set(p2) | revise_pairs)  # type: ignore[arg-type]
         pairs_p3 = sorted(set(p3_revise) | revise_pairs)  # type: ignore[arg-type]
+        pairs_p0 = sorted({c[:2] for c in wait_obs} | {c[:2] for c in p4})  # type: ignore[misc]
 
     checks: list[dict[str, Any]] = []
+
+    # Every cell of a seed shares the same event times, zones and amounts (EVAL_PLAN.md,
+    # amendment 1), so the pooled event count is the same in all cells by construction. P0 reads
+    # it once per (late share, max delay) cell, from the wait row at L = 0.
+    for share, delay in pairs_p0:
+        cell = (share, delay, 0.0)
+        row = obs.get(("wait", *cell))
+        if row is None or p0 is None:
+            note = "missing observed cell" if row is None else "missing prediction"
+            checks.append(_failed("p0", cell, "wait", note, quantity="n_events"))
+            continue
+        lo, hi = _num(p0.get("accept_lo")), _num(p0.get("accept_hi"))
+        observed, expected = _num(row.get("n_events")), _num(p0.get("expected"))
+        checks.append(_region_check("p0", "n_events", cell, "wait", observed, expected, lo, hi))
 
     for cell in p1_cells:
         row, pred = obs.get(("wait", *cell)), p1.get(cell)
         if row is None or pred is None:
-            checks.append(_failed("p1", cell, "wait", _missing(row, pred)))
+            checks.append(_failed("p1", cell, "wait", _missing(row, pred), quantity="n_dropped"))
             continue
         expected = _num(pred.get("rho")) * _num(row.get("n_events"))
         tol = 4.0 * math.sqrt(2.0 * expected) + 2.0 if expected >= 0 else math.nan
-        checks.append(_check("p1", cell, "wait", _num(row.get("n_dropped")), expected, tol))
+        observed = _num(row.get("n_dropped"))
+        checks.append(_check("p1", cell, "wait", observed, expected, tol, quantity="n_dropped"))
 
     for cell in p1_cells:
         wait, revise = obs.get(("wait", *cell)), obs.get(("revise", *cell))
-        if wait is None or revise is None:
-            note = "missing wait cell" if wait is None else "missing revise cell"
-            checks.append(_failed("p1_mode_invariant", cell, "revise", note, 0.0))
-            continue
-        d_wait, d_revise = _num(wait.get("n_dropped")), _num(revise.get("n_dropped"))
-        checks.append(_check("p1_mode_invariant", cell, "revise", d_revise, d_wait, 0.0))
+        for quantity in INVARIANT_QUANTITIES:
+            if wait is None or revise is None:
+                note = "missing wait cell" if wait is None else "missing revise cell"
+                checks.append(_failed("mode_invariant", cell, "revise", note, 0.0, quantity))
+                continue
+            v_wait, v_revise = _num(wait.get(quantity)), _num(revise.get(quantity))
+            checks.append(
+                _check("mode_invariant", cell, "revise", v_revise, v_wait, 0.0, quantity=quantity)
+            )
 
     for share, delay in pairs_p2:
         for lateness in lateness_axis:
             cell = (share, delay, lateness)
             row, pred = obs.get(("revise", *cell)), p2.get((share, delay))
             if row is None or pred is None:
-                checks.append(_failed("p2", cell, "revise", _missing(row, pred)))
+                note = _missing(row, pred)
+                checks.append(_failed("p2", cell, "revise", note, quantity="n_exact_first_live"))
                 continue
-            den = _num(row.get("n_windows_first_live"))
-            rate = _num(row.get("n_exact_first_live")) / den if den > 0 else math.nan
-            tol = _num(pred.get("tolerance"))
-            checks.append(_check("p2", cell, "revise", rate, _num(pred.get("pi")), tol))
+            checks.append(
+                _count_region_check(
+                    "p2", "n_exact_first_live", cell, "revise", row, pred, "n_windows_first_live"
+                )
+            )
 
     for cell in wait_cells:
         row, pred = obs.get(("wait", *cell)), p3_wait.get(cell)
         if row is None or pred is None:
-            checks.append(_failed("p3_wait", cell, "wait", _missing(row, pred)))
+            note = _missing(row, pred)
+            checks.append(_failed("p3_wait", cell, "wait", note, quantity=_P95))
             continue
-        observed = _num(row.get("first_emit_latency_p95"))
-        tol = _num(pred.get("tolerance"))
-        checks.append(_check("p3_wait", cell, "wait", observed, _num(pred.get("p95")), tol))
+        observed, tol = _num(row.get(_P95)), _num(pred.get("tolerance"))
+        checks.append(
+            _check("p3_wait", cell, "wait", observed, _num(pred.get("p95")), tol, quantity=_P95)
+        )
 
     for share, delay in pairs_p3:
         for lateness in lateness_axis:
             cell = (share, delay, lateness)
             row, pred = obs.get(("revise", *cell)), p3_revise.get((share, delay))
             if row is None or pred is None:
-                checks.append(_failed("p3_revise", cell, "revise", _missing(row, pred)))
+                note = _missing(row, pred)
+                checks.append(_failed("p3_revise", cell, "revise", note, quantity=_P95))
                 continue
-            observed = _num(row.get("first_emit_latency_p95"))
-            tol = _num(pred.get("tolerance"))
-            checks.append(_check("p3_revise", cell, "revise", observed, _num(pred.get("p95")), tol))
+            observed, tol = _num(row.get(_P95)), _num(pred.get("tolerance"))
+            checks.append(
+                _check(
+                    "p3_revise", cell, "revise", observed, _num(pred.get("p95")), tol, quantity=_P95
+                )
+            )
+
+    for cell in p4_cells:
+        row, pred = obs.get(("wait", *cell)), p4.get(cell)
+        if row is None or pred is None:
+            note = _missing(row, pred)
+            checks.append(_failed("p4", cell, "wait", note, quantity="n_exact_final_live"))
+            continue
+        checks.append(
+            _count_region_check(
+                "p4", "n_exact_final_live", cell, "wait", row, pred, "n_windows_live"
+            )
+        )
 
     families = {}
     for fam in FAMILIES:
@@ -392,6 +498,43 @@ def evaluate_predictions(
         "n_failed": len(checks) - n_passed,
         "primary_passed": bool(checks) and n_passed == len(checks),
     }
+
+
+PIN_NAME = "predictions.sha256"
+
+
+class PredictionsPinError(RuntimeError):
+    """The predictions file is not the one pinned in `predictions.sha256`."""
+
+
+def pin_path(predictions_path: Path | str) -> Path:
+    """The pin file sits next to the predictions file."""
+    return Path(predictions_path).with_name(PIN_NAME)
+
+
+def write_pin(predictions_path: Path | str) -> str:
+    """Pin the current bytes of the predictions file: `<hex digest>  <file name>` and a newline."""
+    p = Path(predictions_path)
+    digest = hashlib.sha256(p.read_bytes()).hexdigest()
+    pin_path(p).write_text(f"{digest}  {p.name}\n", encoding="utf-8", newline="\n")
+    return digest
+
+
+def check_pin(predictions_path: Path | str, digest: str) -> None:
+    """Raise unless the pin file exists and names `digest`, the sha256 of the predictions bytes."""
+    pin = pin_path(predictions_path)
+    if not pin.is_file():
+        raise PredictionsPinError(
+            f"pinned digest not found: {pin}; the registered sweep needs the pin committed "
+            "with the predictions (`streampipe predict --pin`)"
+        )
+    words = pin.read_text(encoding="utf-8").split()
+    pinned = words[0].lower() if words else ""
+    if pinned != digest:
+        raise PredictionsPinError(
+            f"predictions file does not match its pin: sha256 {digest}, but {pin.name} says "
+            f"{pinned or '(empty)'}; the registered sweep refuses a changed predictions file"
+        )
 
 
 def load_predictions(path: Path | str) -> tuple[dict[str, Any], str]:
@@ -420,9 +563,10 @@ def run_grid(
 ) -> Path:
     """Run the grid; write `<out>.csv` (one row per run), `<out>_pooled.csv`, `<out>_claim.json`.
 
-    The registered grid requires a predictions file and fails before running anything without
-    one. Any other grid is a smoke run: predictions are evaluated only when a path is given. When
-    they are, `<out>_checks.csv` holds one row per check.
+    The registered grid requires a predictions file whose sha256 equals the digest pinned in
+    `predictions.sha256` next to it, and fails before running anything without one. Any other grid
+    is a smoke run: predictions are evaluated only when a path is given, and the pin is not
+    enforced. When they are evaluated, `<out>_checks.csv` holds one row per check.
     """
     out = Path(out_csv)
     registered = grid == FULL_GRID
@@ -433,6 +577,8 @@ def run_grid(
     predictions, sha = (
         load_predictions(predictions_path) if predictions_path is not None else (None, None)
     )
+    if registered and predictions_path is not None and sha is not None:
+        check_pin(predictions_path, sha)
     out.parent.mkdir(parents=True, exist_ok=True)
     rows = execute_grid(grid, workers)
 

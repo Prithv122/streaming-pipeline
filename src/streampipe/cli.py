@@ -60,6 +60,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pd.add_argument(
         "--out", type=Path, default=PREDICTIONS_PATH, help=f"default {PREDICTIONS_PATH.as_posix()}"
     )
+    pd.add_argument(
+        "--pin",
+        action="store_true",
+        help="also write predictions.sha256 next to the output; the registered sweep requires it",
+    )
 
     pr = sub.add_parser("produce", help="publish a log to the orders topic")
     pr.add_argument("--log", type=Path, required=True)
@@ -130,10 +135,11 @@ def _format_failed(check: dict) -> str:
     where = (
         f"share={check['late_share']:g} delay={check['max_delay_s']:g}s L={check['lateness_s']:g}s"
     )
-    detail = (
-        f"observed={fmt(check['observed'])} predicted={fmt(check['predicted'])} "
-        f"tolerance={fmt(check['tolerance'])}"
-    )
+    detail = f"observed={fmt(check['observed'])} predicted={fmt(check['predicted'])}"
+    if check["accept_lo"] is not None or check["accept_hi"] is not None:
+        detail += f" region=[{fmt(check['accept_lo'])}, {fmt(check['accept_hi'])}]"
+    else:
+        detail += f" tolerance={fmt(check['tolerance'])}"
     note = f" ({check['note']})" if check["note"] else ""
     return f"  {check['family']} {where} {detail}{note}"
 
@@ -148,11 +154,16 @@ def _cmd_predict(args: argparse.Namespace) -> int:
     start = time.perf_counter()
     analytic.write_predictions(args.out)
     print(f"wrote predictions to {args.out} in {time.perf_counter() - start:.1f}s")
+    if args.pin:
+        from streampipe.evalrun import pin_path, write_pin
+
+        digest = write_pin(args.out)
+        print(f"pinned sha256 {digest} in {pin_path(args.out)}")
     return 0
 
 
 def _cmd_sweep(args: argparse.Namespace) -> int:
-    from streampipe.evalrun import FULL_GRID, SMALL_GRID, run_grid
+    from streampipe.evalrun import FULL_GRID, SMALL_GRID, PredictionsPinError, run_grid
 
     grid = SMALL_GRID if args.small else FULL_GRID
     target = args.out or (SMALL_SWEEP_OUT if args.small else FULL_SWEEP_OUT)
@@ -161,7 +172,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
         predictions = None  # a smoke run needs no predictions unless asked for
     try:
         out = run_grid(grid, target, workers=args.workers, predictions_path=predictions)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, PredictionsPinError) as e:
         print(f"streampipe: {e}", file=sys.stderr)
         return 2
     claim_path = out.with_name(f"{out.stem}_claim.json")

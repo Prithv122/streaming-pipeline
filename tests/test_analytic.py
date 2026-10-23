@@ -324,6 +324,145 @@ def test_first_exact_matches_independent_quadrature() -> None:
     assert var == pytest.approx(var_want, rel=2e-3)
 
 
+# -- exact count regions (P2 and P4) ---------------------------------------------------------
+
+ALPHA = an.ALPHA_PER_TAIL
+
+
+def binom_pmf(n: int, c: float) -> np.ndarray:
+    return np.array([math.comb(n, k) * c**k * (1 - c) ** (n - k) for k in range(n + 1)])
+
+
+def test_alpha_is_the_two_sided_level_of_four_sigma() -> None:
+    one_sided = 0.5 * math.erfc(4.0 / math.sqrt(2.0))
+    assert one_sided == pytest.approx(ALPHA, rel=1e-3)
+
+
+def test_convolution_power_is_the_binomial_of_the_pooled_trials() -> None:
+    single = binom_pmf(6, 0.37)
+    for n in (1, 2, 5, 9):
+        got = an._convolve_power(single, n)
+        assert len(got) == 6 * n + 1
+        assert np.allclose(got, binom_pmf(6 * n, 0.37), rtol=1e-12, atol=0)
+    assert an._convolve_power(single, 0).tolist() == [1.0]
+
+
+def test_acceptance_region_on_a_hand_computed_binomial() -> None:
+    """Two windows of six fair coins, one seed: X ~ Binomial(12, 1/2), all masses are k/4096."""
+    pmf = an._convolve_power(binom_pmf(6, 0.5), 2)
+    assert pmf[0] == 1 / 4096 and pmf[1] == 12 / 4096
+    # P(X<=1) = 13/4096 <= 0.01 < P(X<=2) = 79/4096, and the same by symmetry above.
+    lo, hi, p_fail = an.acceptance_region(pmf, 0.01)
+    assert (lo, hi) == (2, 10)
+    assert p_fail == pytest.approx(2 * 13 / 4096)
+    # Below the mass of X = 0 the region is everything.
+    assert an.acceptance_region(pmf, 1e-4) == (0, 12, 0.0)
+    # The tail bound is inclusive: P(X < 1) = 1/4096 equals alpha, so lo = 1 is allowed.
+    assert an.acceptance_region(pmf, 1 / 4096)[:2] == (1, 11)
+    # A degenerate X (every zone exact) leaves a single point.
+    assert an.acceptance_region(np.array([0.0, 0.0, 1.0]), ALPHA) == (2, 2, 0.0)
+
+
+@pytest.mark.parametrize("alpha", [1e-6, ALPHA, 1e-3, 0.05])
+def test_acceptance_region_is_the_largest_lo_and_smallest_hi(alpha: float) -> None:
+    pmf = an._convolve_power(binom_pmf(6, 0.1), 5)  # skewed, N = 30
+    lo, hi, p_fail = an.acceptance_region(pmf, alpha)
+    assert pmf[:lo].sum() <= alpha < pmf[: lo + 1].sum()
+    assert pmf[hi + 1 :].sum() <= alpha
+    assert hi == 0 or pmf[hi:].sum() > alpha
+    assert p_fail == pytest.approx(pmf[:lo].sum() + pmf[hi + 1 :].sum())
+
+
+@pytest.mark.parametrize(("lat"), [0.0, 10.0, 15.0])
+def test_window_pmf_matches_independent_quadrature_and_moments(lat: float) -> None:
+    params = SMALL
+    p, y, z = 0.2, 30.0, params.zones
+    mod = Model(p, y, params)
+    for e in (300.0, 600.0):
+        m = e + lat
+        x_up = an._x_horizon(mod, m)
+        pmf, ec, ec2 = an._window_exact_stats(mod, e, lat, x_up, 0.01)
+        xs = m + np.linspace(0.0, x_up - m, 6001)
+        surv = np.exp(-a_ref(m, xs, p, 2.0, y, params))
+        dens = surv[:-1] - surv[1:]
+        mid = 0.5 * (xs[1:] + xs[:-1])
+        c = np.exp(-mu_ref(e, mid, p, 2.0, y, params))
+        want = np.array(
+            [(math.comb(z, k) * c**k * (1 - c) ** (z - k) * dens).sum() for k in range(z + 1)]
+        )
+        want /= dens.sum()
+        assert pmf.sum() == pytest.approx(1.0, abs=1e-12)
+        assert np.allclose(pmf, want, rtol=3e-3, atol=1e-5)
+        mean = float((np.arange(z + 1) * pmf).sum())
+        var = float(((np.arange(z + 1) - mean) ** 2 * pmf).sum())
+        assert mean == pytest.approx(z * ec, rel=1e-12)
+        assert var == pytest.approx(z * (ec - ec2) + z * z * (ec2 - ec * ec), rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("p", "y", "lat"), [(0.05, 30.0, 0.0), (0.2, 30.0, 15.0), (0.0, 30.0, 0.0)]
+)
+def test_pooled_pmf_regions_are_consistent_with_the_rate_and_its_variance(
+    p: float, y: float, lat: float
+) -> None:
+    params = ModelParams(duration_s=600.0)
+    pmf, pi, var, n_e = an._exact_pmf(Model(p, y, params), lat, 0.1)
+    n = params.seeds * params.zones * n_e
+    ks = np.arange(n + 1)
+    assert len(pmf) == n + 1 and pmf.sum() == pytest.approx(1.0, abs=1e-9)
+    mean = float((ks * pmf).sum())
+    assert mean == pytest.approx(pi * n, rel=1e-9)
+    assert float(((ks - mean) ** 2 * pmf).sum()) == pytest.approx(var * n * n, rel=1e-6)
+    lo, hi, p_fail = an.acceptance_region(pmf, ALPHA)
+    assert pmf[:lo].sum() <= ALPHA < pmf[: lo + 1].sum()
+    assert pmf[hi + 1 :].sum() <= ALPHA
+    assert hi == n or pmf[hi:].sum() > ALPHA
+    assert 0 < p_fail <= 2 * ALPHA
+    assert lo < mean < hi
+    st = an.exact_stats(p, y, lat, 0.1, params)
+    assert (st.lo, st.hi, st.n_expected) == (lo, hi, n)
+    assert (st.pi, st.var, st.p_fail) == (pi, var, p_fail)
+
+
+def test_p4_at_zero_lateness_is_p2_and_grows_with_lateness() -> None:
+    params = ModelParams(duration_s=600.0)
+    for p, y in ((0.05, 30.0), (0.2, 30.0)):
+        zero = an.exact_stats(p, y, 0.0, 0.1, params)
+        assert (zero.pi, zero.var) == an.first_exact(p, y, 0.1, params)
+        pis = [an.exact_stats(p, y, lat, 0.1, params).pi for lat in (0.0, 5.0, 15.0)]
+        assert pis[0] < pis[1] < pis[2] < 1.0
+    # With L = Y no window event can arrive after sigma: quadrature reproduces the closed form.
+    full = an.exact_stats(0.2, 30.0, 30.0, 0.1, params)
+    assert full.pi == pytest.approx(1.0, abs=1e-9)
+    assert (full.lo, full.hi) == (full.n_expected, full.n_expected)
+
+
+def test_p4_live_windows_follow_the_lateness() -> None:
+    params = an.DEFAULT_PARAMS
+    assert {len(an.live_ends(lat, params)) for lat in (0.0, 5.0, 15.0, 30.0)} == {59}
+    assert len(an.live_ends(60.0, params)) == 58
+    st = an.exact_stats(0.05, 30.0, 60.0, 0.5, ModelParams(duration_s=1200.0))
+    assert st.n_expected == 5 * 6 * len(an.live_ends(60.0, ModelParams(duration_s=1200.0)))
+
+
+def test_event_count_region() -> None:
+    r = an.event_count_region()
+    assert r["expected"] == 103_500.0 == 5 * an.expected_events()
+    assert r["sd"] == pytest.approx(math.sqrt(103_500.0))
+    assert r["accept_lo"] == math.floor(103_500.0 - 4 * r["sd"]) == 102_213.0
+    assert r["accept_hi"] == math.ceil(103_500.0 + 4 * r["sd"]) == 104_787.0
+    assert an.event_count_region(SMALL)["expected"] == 5 * an.expected_events(SMALL)
+    # Exact Poisson tails of that region stay below 1e-4 (the normal value is 3.2e-5).
+    lam = r["expected"]
+
+    def pmf(k: int) -> float:
+        return math.exp(k * math.log(lam) - lam - math.lgamma(k + 1))
+
+    lo, hi = int(r["accept_lo"]), int(r["accept_hi"])
+    assert sum(pmf(k) for k in range(lo - 3000, lo)) < 1e-4
+    assert sum(pmf(k) for k in range(hi + 1, hi + 3000)) < 1e-4
+
+
 # -- P3 --------------------------------------------------------------------------------------
 
 
@@ -398,7 +537,7 @@ TINY = {
     "late_shares": (0.0, 0.2),
     "max_delays": (5.0, 30.0),
     "lateness": (0.0, 30.0),
-    "steps": an.Steps(p1=2.0, p2=0.1, p3=0.1),
+    "steps": an.Steps(p1=2.0, p2=0.1, p3=0.1, p4=0.1),
 }
 
 
@@ -421,22 +560,28 @@ def test_predictions_schema_on_a_tiny_grid(tmp_path: Path) -> None:
         "window_s": 60.0,
         "seeds": 5,
     }
-    assert d["tolerance_rules"] == {
-        "p1": "abs(D - rho*N) <= 4*sqrt(2*rho*N) + 2",
-        "p2": "abs(pi_hat - pi) <= 4*sd",
-        "p3": "abs(p95_hat - p95) <= max(4*se95, 0.05)",
-    }
+    assert set(d["tolerance_rules"]) == {"p0", "p1", "p2", "p3", "p4"}
+    assert d["tolerance_rules"]["p1"] == "abs(D - rho*N) <= 4*sqrt(2*rho*N) + 2"
+    assert d["tolerance_rules"]["p3"] == "abs(p95_hat - p95) <= max(4*se95, 0.05)"
     p1, p2, p3 = d["p1_drop_rate"], d["p2_first_exact"], d["p3_first_latency"]
-    assert (len(p1), len(p2), len(p3)) == (8, 4, 12)
+    p4 = d["p4_final_exact"]
+    assert (len(p1), len(p2), len(p3), len(p4)) == (8, 4, 12, 8)
+    assert set(d["p0_events"]) == {"expected", "sd", "accept_lo", "accept_hi"}
     for r in p1:
         assert set(r) == {
             "late_share", "max_delay_s", "lateness_s", "rho", "rho_coarse", "step", "exact_zero"
         }  # fmt: skip
     for r in p2:
         assert set(r) == {
-            "late_share", "max_delay_s", "pi", "sd", "tolerance", "pi_coarse", "step"
+            "late_share", "max_delay_s", "pi", "sd", "tolerance", "pi_coarse", "step",
+            "n_expected", "accept_lo", "accept_hi", "alpha_per_tail", "p_fail_model",
         }  # fmt: skip
         assert r["tolerance"] == pytest.approx(4 * r["sd"])
+    for r in p4:
+        assert set(r) == {
+            "late_share", "max_delay_s", "lateness_s", "pi", "sd", "n_expected", "accept_lo",
+            "accept_hi", "alpha_per_tail", "p_fail_model", "pi_coarse", "step", "exact_one",
+        }  # fmt: skip
     for r in p3:
         assert set(r) == {
             "mode", "late_share", "max_delay_s", "lateness_s", "p50", "p95", "se95",
@@ -444,6 +589,33 @@ def test_predictions_schema_on_a_tiny_grid(tmp_path: Path) -> None:
         }  # fmt: skip
         assert r["tolerance"] == max(4 * r["se95"], 0.05)
     assert [r["mode"] for r in p3] == ["wait"] * 8 + ["revise"] * 4
+    # Exact-count rows: region inside [0, n], tails at the registered level, L = 0 equals P2.
+    for r in p2 + p4:
+        assert 0 <= r["accept_lo"] <= r["n_expected"] * r["pi"] <= r["accept_hi"] <= r["n_expected"]
+        assert r["alpha_per_tail"] == an.ALPHA_PER_TAIL
+        assert 0.0 <= r["p_fail_model"] <= 2 * an.ALPHA_PER_TAIL
+    for r in p2:
+        twin = next(
+            q
+            for q in p4
+            if (q["late_share"], q["max_delay_s"], q["lateness_s"])
+            == (r["late_share"], r["max_delay_s"], 0.0)
+        )
+        for key in ("pi", "sd", "n_expected", "accept_lo", "accept_hi", "p_fail_model"):
+            assert twin[key] == r[key]
+    ones = {(r["late_share"], r["max_delay_s"], r["lateness_s"]) for r in p4 if r["exact_one"]}
+    assert ones == {(0.0, 5.0, 30.0), (0.0, 30.0, 30.0), (0.2, 5.0, 30.0), (0.2, 30.0, 30.0)}
+    for r in p4:
+        if r["exact_one"]:
+            n = r["n_expected"]
+            assert (r["pi"], r["sd"], r["accept_lo"], r["accept_hi"], r["p_fail_model"]) == (
+                1.0,
+                0.0,
+                n,
+                n,
+                0.0,
+            )
+    assert d["p0_events"]["expected"] == 5 * an.expected_events(TINY_PARAMS)
     assert all(r["lateness_s"] is None for r in p3 if r["mode"] == "revise")
     zero = [r for r in p1 if r["exact_zero"]]
     assert {(r["late_share"], r["max_delay_s"], r["lateness_s"]) for r in zero} == {
@@ -460,7 +632,7 @@ def test_predictions_schema_on_a_tiny_grid(tmp_path: Path) -> None:
     # Every value agrees with its coarse companion to the stated convergence rule.
     for r in p1:
         assert abs(r["rho"] - r["rho_coarse"]) <= max(1e-6, 1e-3 * abs(r["rho"]))
-    for r in p2:
+    for r in p2 + p4:
         assert abs(r["pi"] - r["pi_coarse"]) <= max(1e-6, 1e-3 * abs(r["pi"]))
     for r in p3:
         assert abs(r["p95"] - r["p95_coarse"]) <= max(1e-6, 1e-3 * abs(r["p95"]))
@@ -471,11 +643,12 @@ def test_committed_predictions_have_the_full_grid() -> None:
     if not path.exists():
         pytest.skip("results/predictions.json has not been generated")
     d = json.loads(path.read_text(encoding="utf-8"))
-    assert (len(d["p1_drop_rate"]), len(d["p2_first_exact"]), len(d["p3_first_latency"])) == (
-        45,
-        9,
-        54,
-    )
+    assert (
+        len(d["p1_drop_rate"]),
+        len(d["p2_first_exact"]),
+        len(d["p3_first_latency"]),
+        len(d["p4_final_exact"]),
+    ) == (45, 9, 54, 45)
     assert d["params"] == {
         "rate_per_s": 5.0,
         "burst_mult": 4.0,
@@ -488,3 +661,52 @@ def test_committed_predictions_have_the_full_grid() -> None:
         "seeds": 5,
     }
     assert sum(r["mode"] == "wait" for r in d["p3_first_latency"]) == 45
+
+
+def test_committed_predictions_match_their_pin_and_the_plan_constants() -> None:
+    import hashlib
+
+    path = ROOT / "results" / "predictions.json"
+    pin = ROOT / "results" / "predictions.sha256"
+    if not path.exists():
+        pytest.skip("results/predictions.json has not been generated")
+    d = json.loads(path.read_text(encoding="utf-8"))
+    digest, name = pin.read_text(encoding="utf-8").split()
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert name == "predictions.json"
+    assert pin.read_text(encoding="utf-8").endswith("  predictions.json\n")
+    assert d["p0_events"] == {
+        "expected": 103_500.0,
+        "sd": pytest.approx(math.sqrt(103_500.0)),
+        "accept_lo": math.floor(103_500.0 - 4 * math.sqrt(103_500.0)),
+        "accept_hi": math.ceil(103_500.0 + 4 * math.sqrt(103_500.0)),
+    }
+    p2 = d["p2_first_exact"]
+    p4 = d["p4_final_exact"]
+    assert {r["n_expected"] for r in p2} == {5 * 6 * 59}
+    assert {(r["lateness_s"], r["n_expected"]) for r in p4} == {
+        (0.0, 1770),
+        (5.0, 1770),
+        (15.0, 1770),
+        (30.0, 1770),
+        (60.0, 1740),
+    }
+    for r in p2 + p4:
+        assert r["alpha_per_tail"] == an.ALPHA_PER_TAIL
+        assert r["accept_lo"] <= r["pi"] * r["n_expected"] <= r["accept_hi"]
+        assert r["p_fail_model"] <= 2 * an.ALPHA_PER_TAIL
+    for r in p2:
+        twin = next(
+            q
+            for q in p4
+            if (q["late_share"], q["max_delay_s"], q["lateness_s"])
+            == (r["late_share"], r["max_delay_s"], 0.0)
+        )
+        assert (twin["pi"], twin["accept_lo"], twin["accept_hi"]) == (
+            r["pi"],
+            r["accept_lo"],
+            r["accept_hi"],
+        )
+    for r in p4:
+        top = r["max_delay_s"] if r["late_share"] > 0 else 2.0
+        assert r["exact_one"] == (r["lateness_s"] >= top)

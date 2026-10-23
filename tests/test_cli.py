@@ -22,6 +22,8 @@ def test_parser_defaults_and_required_args() -> None:
     assert args.predictions == Path("p.json")
     args = p.parse_args(["predict"])
     assert args.out == Path("results/predictions.json")
+    assert args.pin is False
+    assert p.parse_args(["predict", "--pin"]).pin is True
     args = p.parse_args(["consume"])
     assert args.bootstrap == "localhost:19092"
     assert (args.topic_in, args.topic_out, args.group_id) == (
@@ -99,9 +101,13 @@ def _tiny_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
 
-def _write_predictions(path: Path, body: dict | None = None) -> None:
+def _write_predictions(path: Path, body: dict | None = None, pin: bool = True) -> None:
+    from streampipe.evalrun import write_pin
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(body or {}, sort_keys=True), encoding="utf-8")
+    if pin:
+        write_pin(path)
 
 
 def test_sweep_full_grid_defaults_to_results_and_reports_both_claims(
@@ -117,8 +123,8 @@ def test_sweep_full_grid_defaults_to_results_and_reports_both_claims(
     assert claim["primary"]["primary_passed"] is False
     text = capsys.readouterr().out
     assert "C0 construction check passed:" in text
-    assert "primary claim passed: False (0/5 checks)" in text
-    assert "failed checks (showing 5 of 5):" in text
+    assert "primary claim passed: False (0/9 checks)" in text
+    assert "failed checks (showing 9 of 9):" in text
     assert "p1 share=0.05 delay=30s L=30s" in text
     assert "smoke run" not in text
 
@@ -134,7 +140,7 @@ def test_sweep_full_grid_lists_at_most_ten_failed_checks(
     _write_predictions(tmp_path / "pred.json")
     assert cli.main(["sweep", "--predictions", "pred.json"]) == 0
     text = capsys.readouterr().out
-    assert "failed checks (showing 10 of 45):" in text
+    assert "failed checks (showing 10 of 81):" in text
     assert text.count("\n  p") == 10
 
 
@@ -151,6 +157,25 @@ def test_sweep_full_grid_without_predictions_fails_before_running(
     assert cli.main(["sweep"]) == 2
     assert "commit results/predictions.json first" in capsys.readouterr().err
     assert not (tmp_path / "results").exists()
+
+
+def test_sweep_full_grid_refuses_a_missing_or_stale_pin_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from streampipe import evalrun
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("the grid must not run")
+
+    _tiny_full(monkeypatch, tmp_path)
+    monkeypatch.setattr(evalrun, "execute_grid", boom)
+    _write_predictions(tmp_path / "results" / "predictions.json", pin=False)
+    assert cli.main(["sweep"]) == 2
+    assert "pinned digest not found" in capsys.readouterr().err
+    evalrun.pin_path(tmp_path / "results" / "predictions.json").write_text("0" * 64 + "\n")
+    assert cli.main(["sweep"]) == 2
+    assert "does not match its pin" in capsys.readouterr().err
+    assert not (tmp_path / "results" / "sweep.csv").exists()
 
 
 def test_sweep_small_evaluates_predictions_only_when_present(
@@ -182,6 +207,27 @@ def test_predict_calls_the_analytic_model(
     assert calls == [out]
     text = capsys.readouterr().out
     assert f"wrote predictions to {out}" in text and text.strip().endswith("s")
+
+
+def test_predict_pin_writes_the_digest_next_to_the_predictions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import hashlib
+
+    def fake_write(path: Path) -> None:
+        Path(path).write_text('{"model": "ANALYTIC.md"}\n', encoding="utf-8")
+
+    monkeypatch.setitem(
+        sys.modules, "streampipe.analytic", SimpleNamespace(write_predictions=fake_write)
+    )
+    out = tmp_path / "nested" / "predictions.json"
+    assert cli.main(["predict", "--out", str(out)]) == 0
+    assert not (tmp_path / "nested" / "predictions.sha256").exists()  # pinning is deliberate
+    assert cli.main(["predict", "--out", str(out), "--pin"]) == 0
+    digest = hashlib.sha256(out.read_bytes()).hexdigest()
+    pin = tmp_path / "nested" / "predictions.sha256"
+    assert pin.read_bytes() == f"{digest}  predictions.json\n".encode()
+    assert digest in capsys.readouterr().out
 
 
 def test_predict_reports_an_unimportable_model(
