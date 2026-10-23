@@ -78,8 +78,70 @@ flowchart LR
 
 ## 5. Results
 
-**Not yet measured.** The pre-registered sweep (450 runs) has not been run. This section will be
-written from `results/` only.
+All numbers come from [`results/REPORT.md`](results/REPORT.md), which `streampipe report`
+generates from the committed sweep files. The sweep ran 450 runs: 3 late shares × 3 max delays ×
+5 values of `L` × 2 modes × 5 seeds. Each run is 3,600 s of event time and about 20,700 events, and
+the data is synthetic (§2). Latencies are in stream seconds, pooled over the 5 seeds. A rerun from a
+fresh clone is byte-identical.
+
+**The claim.** The pre-registered claim turned out to be true by construction, which a review caught
+before the run (delay ≤ 30 s and `L = 30` means nothing can be dropped). It is kept as a construction
+check, and it passed. The plan was then amended, before any data, to a falsifiable claim. An analytic
+model of the generator ([ANALYTIC.md](ANALYTIC.md)) predicts six things, frozen in
+`results/predictions.json` with exact acceptance regions and a pinned hash:
+- the event count;
+- the drop rate;
+- revise's first-answer exactness;
+- wait's final exactness;
+- first-emit latency;
+- the wait = revise invariants.
+
+| Claim | Result |
+|---|---|
+| C0, construction check: wait, `L = 30`, 5 % late, ≤ 30 s: exact ≥ 99 %, first-emit p95 ≤ 90 s | passed (100 %, 31.6 s), as it must |
+| Primary: the analytic model predicts the core (P0–P4 + invariants) | **passed, 369 / 369 checks** (about 50–55 independent tests; false-failure risk if the model is right ≈ 0.5 %) |
+
+**Wait vs revise at equal `L`** (5 % late, delays up to 30 s; the baseline is `L = 0`):
+
+| `L` | First answer p95, wait | First answer p95, revise | First answer exact, wait | First answer exact, revise | Events dropped | Corrections per window, revise | Records per run, wait / revise |
+|---|---|---|---|---|---|---|---|
+| 0 | 1.5 s | 1.5 s | 39.9 % | 39.9 % | 1.6 % | 0.00 | 360 / 360 |
+| 5 | 6.5 s | 1.5 s | 66.6 % | 39.9 % | 0.7 % | 0.51 | 360 / 897 |
+| 15 | 16.6 s | 1.5 s | 87.6 % | 39.9 % | 0.2 % | 0.78 | 360 / 996 |
+| 30 | 31.6 s | 1.5 s | 100.0 % | 39.9 % | 0.0 % | 0.92 | 360 / 1,044 |
+
+In wait mode the first answer is the final answer. Final accuracy is identical for both policies by
+construction.
+
+**What it shows.**
+- **Revise's early answer is mostly wrong, and `L` cannot fix that.** It goes out 1.5 s after the
+  window ends at every `L`. That is 30 s sooner than wait at `L = 30`, but at 5 % late it is exact for
+  only 39.9 % of windows, and the rate does not change with `L`. A bigger budget buys more
+  corrections (0.92 per window at `L = 30`), not a better first answer.
+- **Even with zero late events, 27 % of early answers are wrong.** Network jitter of only 0–2 s
+  carries events across the window end. Revise's first answer is exact for 72.9 % of windows at 0 %
+  late, while wait with `L ≥ 5` is 100 %.
+- **Waiting is cheap when the delay bound is known.** At 5 % late with delays up to 30 s, `L = 30`
+  gives 100 % exact windows 31.6 s after the window ends, in one record per window. Revise sends
+  2.9× the records to end at the same values.
+- **When delays exceed the budget, both policies fail together.** In the stress regime (20 % late,
+  up to 120 s), the results by `L` are:
+
+  | `L` | Events dropped | Count error per window | Windows exact | Corrections per window, revise |
+  |---|---|---|---|---|
+  | 0 | 15.0 % | 8.74 | 0.0 % | 0.00 |
+  | 60 | 4.4 % | 2.63 | 8.3 % | 6.06 (8× wait's records) |
+
+  Neither policy recovers what the budget drops.
+
+**Limits.**
+- Every number is a property of this generator: uniform delays, independent lateness, one rate
+  profile. The model and the simulator share that assumption, so passing the claim shows the core
+  does what its semantics say. It says nothing about real order streams.
+- Rows with 0 % late share are identical across max delay. Cells within a seed share the same
+  events, so they are paired, not independent.
+- The broker path has not been run against Redpanda yet. It is a correctness check (same records as
+  the simulator), not a source of latency numbers.
 
 ## 6. How to run
 
@@ -97,8 +159,12 @@ Simulator path (no broker):
 ```bash
 uv run streampipe gen --seed 0 --late-share 0.05 --max-delay 30 --out data/events/s0.jsonl
 uv run streampipe replay --log data/events/s0.jsonl --mode revise --lateness 30
-uv run streampipe sweep --out results/sweep.csv        # the pre-registered grid
+uv run streampipe predict          # recompute the analytic predictions (about 1 min); compare with results/predictions.json
+uv run streampipe sweep            # the registered 450-run grid (about 1 min); refuses to run if the predictions hash does not match the pin
+uv run streampipe report           # regenerate results/REPORT.md from the sweep files
 ```
+
+The sweep is deterministic: a rerun writes byte-identical `results/sweep*.csv` and `sweep_claim.json`.
 
 Broker path (Redpanda in Docker, see [docs/kafka.md](docs/kafka.md)):
 
