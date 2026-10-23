@@ -113,8 +113,9 @@ P(τ_L − e ≤ y) = 1 − exp(−A(e + L, e + y))        for y ≥ L
 ```
 
 All `Z` zones of a window share `τ_L`. Live windows are those closed before the end of the stream:
-`e + L < T`, with `e ≤ T − W`. For the grid's `L` values that means `e + L ≤ T − 30`, and
-`P(M_final < T − 30)` is below `10⁻⁶⁰`. The pooled latency distribution is the equal-weight
+`e + L < T`, with `e ≤ T − W`. That is 59 windows for `L ≤ 30` and 58 for `L = 60` (the window
+ending at 3540 would close at `M ≥ 3600 = T`, which never happens, so it is flushed). For every
+live window `e + L ≤ T − 30`, and `P(M_final < T − 30)` is below `10⁻⁶⁰`. The pooled latency distribution is the equal-weight
 mixture `H(y) = mean over live e of P(τ_L − e ≤ y)`. The prediction is the 95th percentile
 `H⁻¹(0.95)`, and likewise the 50th.
 
