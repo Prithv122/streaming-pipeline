@@ -164,7 +164,7 @@ the claim. Changes, all made before any registered run, and none informed by dat
   invariant check passes.
 - **Correction to A1.4.** The stress-regime sentence "exactness is near 0 at every `L`" is withdrawn.
   The model's own values (P4) replace it.
-- **Disclosure.** About 300 mechanical checks carry about 45 independent tests. The false-failure
+- **Disclosure.** The full grid makes 369 mechanical checks carrying about 50–55 independent tests. The false-failure
   probability if the model is right is about 0.5 % overall (`ANALYTIC.md` §6).
 - **Integrity.** `results/predictions.sha256` pins the predictions file. The registered sweep refuses
   to run if the file is missing or its hash differs.

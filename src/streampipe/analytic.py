@@ -547,7 +547,7 @@ def _converged_exact(
         return (st.pi, st.var, float(st.lo), float(st.hi), st.p_fail, float(st.n_expected))
 
     coarse, fine, step = _refine(run, step0, steps.max_halvings, exact=(2, 3, 5))
-    # p_fail is reported, not converged: it is a tail mass and moves with every quadrature digit.
+    # p_fail is a tail mass; it is held to the same relative convergence test as pi and sd.
     st = ExactStats(fine[0], fine[1], int(fine[5]), int(fine[2]), int(fine[3]), fine[4])
     return _exact_row(st, coarse[0], step, ALPHA_PER_TAIL)
 

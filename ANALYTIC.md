@@ -194,7 +194,7 @@ delays are the same in every cell. As a result:
 - exact-zero P1 cells and `π4 = 1` cells are deterministic;
 - invariants are deterministic.
 
-Of the roughly 300 mechanical checks, about 45 carry independent statistical content.
+Of the 369 mechanical checks on the full grid (P0 9, P1 45, invariants 135, P2 45, P3-wait 45, P3-revise 45, P4 45), about 50–55 carry independent statistical content.
 
 **False-failure probability if the model is exactly right**, from the second pre-run review's
 exact calculations:
@@ -202,7 +202,7 @@ exact calculations:
 | Family | Probability |
 |---|---|
 | P1 | about `10⁻⁵` |
-| P2 and P4 with exact regions | `1.25·10⁻³` summed over the 42 distinct cells (`p_fail_model` in the predictions file) |
+| P2 and P4 with exact regions | `9.1·10⁻⁴` summed over the 19 distinct non-trivial cells (`1.46·10⁻³` over all 54 rows; `p_fail_model` in the predictions file) |
 | P3 | about 0.2–0.5 % in total |
 | Overall | about 0.35–0.6 % |
 
