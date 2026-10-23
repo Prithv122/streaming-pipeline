@@ -1,0 +1,3 @@
+# Hash-pinned and fixture files must keep their exact bytes on every OS.
+results/** -text
+tests/fixtures/** -text
