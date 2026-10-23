@@ -140,8 +140,11 @@ construction.
   does what its semantics say. It says nothing about real order streams.
 - Rows with 0 % late share are identical across max delay. Cells within a seed share the same
   events, so they are paired, not independent.
-- The broker path has not been run against Redpanda yet. It is a correctness check (same records as
-  the simulator), not a source of latency numbers.
+- The broker path is a correctness gate, not a source of latency or throughput numbers. Through
+  Redpanda, two registered-scale logs (one with 12 % of events dropped) gave the same records, in
+  order, as the simulator in both modes. No message was lost or duplicated, checked against the
+  broker's partition offsets ([docs/kafka.md](docs/kafka.md#broker-check-2026-10-23),
+  `results/broker_check.json`).
 
 ## 6. How to run
 
@@ -174,6 +177,8 @@ uv sync --extra kafka
 uv run streampipe produce --log data/events/s0.jsonl
 uv run streampipe consume --mode revise --lateness 30
 uv run pytest -m integration
+uv run python scripts/verify_broker.py   # the broker gate: about 70 s, writes results/broker_check.json
+docker compose down
 ```
 
 `PUBLISH_TOKEN` is the only environment variable, and it is optional. Set it when the bridge posts

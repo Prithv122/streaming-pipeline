@@ -1,0 +1,117 @@
+{
+  "cases": [
+    {
+      "config": {
+        "duration_s": 3600.0,
+        "late_share": 0.05,
+        "lateness_s": 30.0,
+        "max_delay_s": 30.0,
+        "partitions": 1,
+        "seed": 0
+      },
+      "modes": [
+        {
+          "bad_messages": 0,
+          "dropped_broker": 0,
+          "dropped_simulator": 0,
+          "duplicate_record_keys": 0,
+          "events_consumed": 20705,
+          "events_in_log": 20705,
+          "events_produced": 20705,
+          "first_mismatch_vs_simulator": null,
+          "flushed_broker": 6,
+          "flushed_simulator": 6,
+          "input_topic_offsets": 20705,
+          "lateness_s": 30.0,
+          "mode": "wait",
+          "output_topic_offsets": 360,
+          "read_back_offsets_contiguous_from_0": true,
+          "records_consumer_reported": 360,
+          "records_equal_direct_feed_exactly": true,
+          "records_equal_simulator_except_emitted_at": true,
+          "records_read_back": 360,
+          "records_simulator": 360
+        },
+        {
+          "bad_messages": 0,
+          "dropped_broker": 0,
+          "dropped_simulator": 0,
+          "duplicate_record_keys": 0,
+          "events_consumed": 20705,
+          "events_in_log": 20705,
+          "events_produced": 20705,
+          "first_mismatch_vs_simulator": null,
+          "flushed_broker": 6,
+          "flushed_simulator": 6,
+          "input_topic_offsets": 20705,
+          "lateness_s": 30.0,
+          "mode": "revise",
+          "output_topic_offsets": 1042,
+          "read_back_offsets_contiguous_from_0": true,
+          "records_consumer_reported": 1042,
+          "records_equal_direct_feed_exactly": true,
+          "records_equal_simulator_except_emitted_at": true,
+          "records_read_back": 1042,
+          "records_simulator": 1042
+        }
+      ]
+    },
+    {
+      "config": {
+        "duration_s": 3600.0,
+        "late_share": 0.2,
+        "lateness_s": 15.0,
+        "max_delay_s": 120.0,
+        "partitions": 1,
+        "seed": 0
+      },
+      "modes": [
+        {
+          "bad_messages": 0,
+          "dropped_broker": 2486,
+          "dropped_simulator": 2486,
+          "duplicate_record_keys": 0,
+          "events_consumed": 20705,
+          "events_in_log": 20705,
+          "events_produced": 20705,
+          "first_mismatch_vs_simulator": null,
+          "flushed_broker": 6,
+          "flushed_simulator": 6,
+          "input_topic_offsets": 20705,
+          "lateness_s": 15.0,
+          "mode": "wait",
+          "output_topic_offsets": 360,
+          "read_back_offsets_contiguous_from_0": true,
+          "records_consumer_reported": 360,
+          "records_equal_direct_feed_exactly": true,
+          "records_equal_simulator_except_emitted_at": true,
+          "records_read_back": 360,
+          "records_simulator": 360
+        },
+        {
+          "bad_messages": 0,
+          "dropped_broker": 2486,
+          "dropped_simulator": 2486,
+          "duplicate_record_keys": 0,
+          "events_consumed": 20705,
+          "events_in_log": 20705,
+          "events_produced": 20705,
+          "first_mismatch_vs_simulator": null,
+          "flushed_broker": 6,
+          "flushed_simulator": 6,
+          "input_topic_offsets": 20705,
+          "lateness_s": 15.0,
+          "mode": "revise",
+          "output_topic_offsets": 1375,
+          "read_back_offsets_contiguous_from_0": true,
+          "records_consumer_reported": 1375,
+          "records_equal_direct_feed_exactly": true,
+          "records_equal_simulator_except_emitted_at": true,
+          "records_read_back": 1375,
+          "records_simulator": 1375
+        }
+      ]
+    }
+  ],
+  "passed": true
+}

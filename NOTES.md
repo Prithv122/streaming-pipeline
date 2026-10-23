@@ -47,6 +47,25 @@ Working notes: what broke, what was tried, why X over Y.
   - `sweep --small` no longer writes into `results/`.
   - Three mutation-test gaps are closed.
 
+### 2026-10-23 — broker gate
+
+- **The first `docker compose up` failed.** `--set=redpanda.auto_create_topics_enabled=false` is
+  not a `redpanda start` flag, and the broker exited. Auto-creation is now off through
+  `rpk cluster config set` in `init-topics`.
+- **`localhost` on Windows means `::1` first.** The broker advertised `localhost:19092`, but the
+  port is bound to IPv4 loopback only. Every client connection waited about 2 s for the IPv6
+  attempt to fail, and one admin call timed out after 30 s. Advertising and using `127.0.0.1` fixed
+  it: the integration tests went from 50 s to 4 s.
+- **A passing integration test was not enough.** It read back at most the expected number of
+  messages, so a duplicate after that point would not show. Its log was also small. The gate script
+  reads each topic to the end, checks the counts against the broker's own partition offsets, and
+  uses two registered-scale logs.
+- **The first gate case could not drop anything.** It was the C0 cell (`L ≥ max delay`), so a
+  stress cell (12 % dropped) was added. Otherwise the drop path would never have crossed the broker.
+- **Two hangs were in my verification code, not the pipeline.** One was an offset query on a
+  subscribed-but-unassigned consumer. The admin API's `list_offsets` needs no consumer group.
+- Result: identical records to the simulator, in order, in all four runs. No loss, no duplicates.
+
 ---
 
 ## Rejected approaches
@@ -61,7 +80,7 @@ Working notes: what broke, what was tried, why X over Y.
 
 ## Open questions
 
-- [ ] Broker run not done: Docker Desktop was not running. The compose file and the integration
-      test have never started a broker.
+- [x] Broker run done 2026-10-23: the gate passed in all four runs (see the log entry above and
+      `docs/kafka.md`).
 - [ ] Dashboard integration with `29-websocket-live` (the bridge posts `type: "window"`). The hub
       needs a renderer for that type.

@@ -11,7 +11,7 @@ Docker Desktop must be running.
 cd "D:\Coding projects\resume_max\34-streaming-pipeline"; docker compose up -d
 ```
 
-This starts single-node Redpanda (Kafka API on `localhost:19092`) and a one-shot `init-topics`
+This starts single-node Redpanda (Kafka API on `127.0.0.1:19092`) and a one-shot `init-topics`
 service that creates `orders.v1` and `windows.v1` with **1 partition each**. The same thing by hand:
 
 ```bash
@@ -102,6 +102,45 @@ What it changes, and what it does not:
 
 `windows.v1` is append-only and a re-run appends again, so a second run on the same topic shows
 duplicates. Use a fresh topic (or `docker compose down -v`) for a clean comparison.
+
+## Broker check (2026-10-23)
+
+`scripts/verify_broker.py` is the broker gate. It runs two registered-scale logs (seed 0, 3,600 s,
+20,705 events) through Redpanda in both modes and writes `results/broker_check.json`:
+
+- the C0 cell (5 % late, max delay 30 s, `L = 30`), where nothing can be dropped;
+- a stress cell (20 % late, max delay 120 s, `L = 15`), where the drop path and the per-zone drop
+  counters are exercised.
+
+For each run it reads the whole output topic with no message cap. It requires all of the following:
+- events produced = events in the log = input partition offsets = events consumed;
+- records in the simulator = records the consumer reported = output partition offsets = records
+  read back;
+- read-back offsets contiguous from 0, and no duplicate `(zone, window_start, revision)` key;
+- equal drop and flush counts;
+- the records, in order, equal `sim.simulate`'s on every field except `emitted_at`, and equal a
+  direct core feed with the max-event-time clock exactly.
+
+| Case | Mode | Events | Records (= partition offsets) | Dropped | Equal to simulator |
+|---|---|---|---|---|---|
+| 5 %, 30 s, L = 30 | wait | 20,705 | 360 | 0 | yes |
+| 5 %, 30 s, L = 30 | revise | 20,705 | 1,042 | 0 | yes |
+| 20 %, 120 s, L = 15 | wait | 20,705 | 360 | 2,486 | yes |
+| 20 %, 120 s, L = 15 | revise | 20,705 | 1,375 | 2,486 | yes |
+
+No message was lost or duplicated, and there were no malformed messages. `uv run pytest -m
+integration` (2 tests, smaller logs) also passes. Redpanda `v26.2.4`, confluent-kafka 2.16.0
+(librdkafka 2.16.0), Docker Engine 29.7.2 on Windows 11. This is a correctness gate. It measured no
+throughput or latency.
+
+Two fixes were needed on the first broker run:
+- `--set=redpanda.auto_create_topics_enabled=false` is not a `redpanda start` option, and the broker
+  exited at start-up. Auto-creation is now switched off by `rpk cluster config set` in
+  `init-topics`.
+- The broker advertised `localhost:19092`. On Windows, `localhost` resolves to `::1` first, but the
+  port is bound to IPv4 loopback only. Every connection then waited about 2 s for the IPv6 attempt
+  to fail, and one admin call ran out its 30 s budget. The broker now advertises `127.0.0.1:19092`,
+  and the clients default to it. The integration tests went from 50 s to 4 s.
 
 ## Bridge to the dashboard hub
 
