@@ -1,4 +1,4 @@
-"""Console entry point: `streampipe gen | replay | sweep | produce | consume | bridge`."""
+"""Console entry point: `streampipe gen | replay | predict | sweep | produce | consume | bridge`."""
 
 from __future__ import annotations
 
@@ -7,11 +7,14 @@ import importlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import ModuleType
 
 FULL_SWEEP_OUT = Path("results/sweep.csv")
 SMALL_SWEEP_OUT = Path("results/scratch/sweep_small.csv")
+PREDICTIONS_PATH = Path("results/predictions.json")
+MAX_FAILED_SHOWN = 10
 
 MISSING_EXTRA = (
     "streampipe: the Kafka client is not installed. Run `uv sync --extra kafka` and try again."
@@ -45,6 +48,18 @@ def _build_parser() -> argparse.ArgumentParser:
         f"with --small {SMALL_SWEEP_OUT.as_posix()})",
     )
     s.add_argument("--workers", type=int, default=1)
+    s.add_argument(
+        "--predictions",
+        type=Path,
+        default=PREDICTIONS_PATH,
+        help=f"analytic predictions (default {PREDICTIONS_PATH.as_posix()}); required for the "
+        "full grid, optional with --small",
+    )
+
+    pd = sub.add_parser("predict", help="compute the analytic predictions for the sweep")
+    pd.add_argument(
+        "--out", type=Path, default=PREDICTIONS_PATH, help=f"default {PREDICTIONS_PATH.as_posix()}"
+    )
 
     pr = sub.add_parser("produce", help="publish a log to the orders topic")
     pr.add_argument("--log", type=Path, required=True)
@@ -108,19 +123,69 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_failed(check: dict) -> str:
+    def fmt(x: float | None) -> str:
+        return "n/a" if x is None else f"{x:.6g}"
+
+    where = (
+        f"share={check['late_share']:g} delay={check['max_delay_s']:g}s L={check['lateness_s']:g}s"
+    )
+    detail = (
+        f"observed={fmt(check['observed'])} predicted={fmt(check['predicted'])} "
+        f"tolerance={fmt(check['tolerance'])}"
+    )
+    note = f" ({check['note']})" if check["note"] else ""
+    return f"  {check['family']} {where} {detail}{note}"
+
+
+def _cmd_predict(args: argparse.Namespace) -> int:
+    try:
+        analytic = importlib.import_module("streampipe.analytic")
+    except ImportError as e:
+        print(f"streampipe: cannot load the analytic model ({e})", file=sys.stderr)
+        return 2
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    start = time.perf_counter()
+    analytic.write_predictions(args.out)
+    print(f"wrote predictions to {args.out} in {time.perf_counter() - start:.1f}s")
+    return 0
+
+
 def _cmd_sweep(args: argparse.Namespace) -> int:
     from streampipe.evalrun import FULL_GRID, SMALL_GRID, run_grid
 
     grid = SMALL_GRID if args.small else FULL_GRID
     target = args.out or (SMALL_SWEEP_OUT if args.small else FULL_SWEEP_OUT)
-    out = run_grid(grid, target, workers=args.workers)
+    predictions: Path | None = args.predictions
+    if args.small and predictions == PREDICTIONS_PATH and not predictions.is_file():
+        predictions = None  # a smoke run needs no predictions unless asked for
+    try:
+        out = run_grid(grid, target, workers=args.workers, predictions_path=predictions)
+    except FileNotFoundError as e:
+        print(f"streampipe: {e}", file=sys.stderr)
+        return 2
     claim_path = out.with_name(f"{out.stem}_claim.json")
     claim = json.loads(claim_path.read_text(encoding="utf-8"))
-    print(f"wrote {out}, {out.stem}_pooled.csv and {claim_path.name} ({grid.n_runs} runs)")
-    if claim["registered_grid"]:
-        print(f"pre-registered claim passed: {claim['passed']}")
-    else:
+    written = f"{out}, {out.stem}_pooled.csv and {claim_path.name}"
+    if claim["primary"] is not None:
+        written += f" and {out.stem}_checks.csv"
+    print(f"wrote {written} ({grid.n_runs} runs)")
+    primary = claim["primary"]
+    if not claim["registered_grid"]:
         print("smoke run, not the registered result")
+        if primary is not None:
+            print(f"predictions checks: {primary['n_passed']}/{primary['n_checks']} passed")
+        return 0
+    print(f"C0 construction check passed: {claim['c0_construction_check']['passed']}")
+    print(
+        f"primary claim passed: {primary['primary_passed']} "
+        f"({primary['n_passed']}/{primary['n_checks']} checks)"
+    )
+    failed = [c for c in primary["checks"] if not c["passed"]]
+    if failed:
+        print(f"failed checks (showing {min(len(failed), MAX_FAILED_SHOWN)} of {len(failed)}):")
+        for c in failed[:MAX_FAILED_SHOWN]:
+            print(_format_failed(c))
     return 0
 
 
@@ -181,6 +246,7 @@ _COMMANDS = {
     "gen": _cmd_gen,
     "replay": _cmd_replay,
     "sweep": _cmd_sweep,
+    "predict": _cmd_predict,
     "produce": _cmd_produce,
     "consume": _cmd_consume,
     "bridge": _cmd_bridge,

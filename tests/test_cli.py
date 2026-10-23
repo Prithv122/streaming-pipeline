@@ -1,6 +1,8 @@
 import importlib
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +17,11 @@ def test_parser_defaults_and_required_args() -> None:
     assert (args.mode, args.lateness, args.out) == ("revise", 15.0, None)
     args = p.parse_args(["sweep", "--small"])
     assert args.small and args.out is None
+    assert args.predictions == Path("results/predictions.json")
+    args = p.parse_args(["sweep", "--predictions", "p.json"])
+    assert args.predictions == Path("p.json")
+    args = p.parse_args(["predict"])
+    assert args.out == Path("results/predictions.json")
     args = p.parse_args(["consume"])
     assert args.bootstrap == "localhost:19092"
     assert (args.topic_in, args.topic_out, args.group_id) == (
@@ -83,20 +90,113 @@ def test_sweep_small_defaults_to_scratch_never_the_registered_path(
     assert "smoke run, not the registered result" in capsys.readouterr().out
 
 
-def test_sweep_full_grid_defaults_to_results_and_reports_the_claim(
+def _tiny_full(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Stand in a tiny grid for the registered one, so the test stays fast, and chdir to tmp."""
+    from streampipe import evalrun
+
+    tiny = evalrun.Grid((0.05,), (30.0,), (30.0,), ("wait",), (0,), duration_s=120.0)
+    monkeypatch.setattr(evalrun, "FULL_GRID", tiny)
+    monkeypatch.chdir(tmp_path)
+
+
+def _write_predictions(path: Path, body: dict | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(body or {}, sort_keys=True), encoding="utf-8")
+
+
+def test_sweep_full_grid_defaults_to_results_and_reports_both_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _tiny_full(monkeypatch, tmp_path)
+    _write_predictions(tmp_path / "results" / "predictions.json")
+    assert cli.main(["sweep"]) == 0
+    assert (tmp_path / "results" / "sweep.csv").exists()
+    assert (tmp_path / "results" / "sweep_checks.csv").exists()
+    claim = json.loads((tmp_path / "results" / "sweep_claim.json").read_text())
+    assert (claim["grid"], claim["registered_grid"], claim["smoke"]) == ("full", True, False)
+    assert claim["primary"]["primary_passed"] is False
+    text = capsys.readouterr().out
+    assert "C0 construction check passed:" in text
+    assert "primary claim passed: False (0/5 checks)" in text
+    assert "failed checks (showing 5 of 5):" in text
+    assert "p1 share=0.05 delay=30s L=30s" in text
+    assert "smoke run" not in text
+
+
+def test_sweep_full_grid_lists_at_most_ten_failed_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from streampipe import evalrun
 
-    # A tiny stand-in for the registered grid, so the test stays fast.
-    tiny = evalrun.Grid((0.05,), (30.0,), (30.0,), ("wait",), (0,), duration_s=120.0)
-    monkeypatch.setattr(evalrun, "FULL_GRID", tiny)
+    grid = evalrun.Grid((0.0, 0.05, 0.2), (5.0, 30.0, 120.0), (0.0,), ("wait",), (0,), 30.0)
+    monkeypatch.setattr(evalrun, "FULL_GRID", grid)
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["sweep"]) == 0
-    assert (tmp_path / "results" / "sweep.csv").exists()
-    claim = json.loads((tmp_path / "results" / "sweep_claim.json").read_text())
-    assert (claim["grid"], claim["registered_grid"]) == ("full", True)
-    assert "pre-registered claim passed" in capsys.readouterr().out
+    _write_predictions(tmp_path / "pred.json")
+    assert cli.main(["sweep", "--predictions", "pred.json"]) == 0
+    text = capsys.readouterr().out
+    assert "failed checks (showing 10 of 45):" in text
+    assert text.count("\n  p") == 10
+
+
+def test_sweep_full_grid_without_predictions_fails_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from streampipe import evalrun
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("the grid must not run")
+
+    monkeypatch.setattr(evalrun, "execute_grid", boom)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["sweep"]) == 2
+    assert "commit results/predictions.json first" in capsys.readouterr().err
+    assert not (tmp_path / "results").exists()
+
+
+def test_sweep_small_evaluates_predictions_only_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_predictions(tmp_path / "other.json")
+    assert cli.main(["sweep", "--small", "--predictions", "other.json"]) == 0
+    scratch = tmp_path / "results" / "scratch"
+    assert (scratch / "sweep_small_checks.csv").exists()
+    claim = json.loads((scratch / "sweep_small_claim.json").read_text())
+    assert (claim["smoke"], claim["predictions_sha256"] is not None) == (True, True)
+    text = capsys.readouterr().out
+    assert "smoke run, not the registered result" in text
+    assert "primary claim passed" not in text
+    # an explicit path to nothing is an error, not a silent skip
+    assert cli.main(["sweep", "--small", "--predictions", "nope.json"]) == 2
+    assert "not found" in capsys.readouterr().err
+
+
+def test_predict_calls_the_analytic_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[Path] = []
+    fake = SimpleNamespace(write_predictions=lambda path: calls.append(Path(path)))
+    monkeypatch.setitem(sys.modules, "streampipe.analytic", fake)
+    out = tmp_path / "nested" / "predictions.json"
+    assert cli.main(["predict", "--out", str(out)]) == 0
+    assert calls == [out]
+    text = capsys.readouterr().out
+    assert f"wrote predictions to {out}" in text and text.strip().endswith("s")
+
+
+def test_predict_reports_an_unimportable_model(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real_import = importlib.import_module
+
+    def fake_import(name: str, package: str | None = None):
+        if name == "streampipe.analytic":
+            raise ModuleNotFoundError("No module named 'scipy'", name="scipy")
+        return real_import(name, package)
+
+    monkeypatch.setattr(cli.importlib, "import_module", fake_import)
+    assert cli.main(["predict"]) == 2
+    assert "analytic model" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
