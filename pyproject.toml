@@ -27,6 +27,7 @@ packages = ["src/streampipe"]
 
 [dependency-groups]
 dev = [
+    "numpy==2.5.3",
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.9",
