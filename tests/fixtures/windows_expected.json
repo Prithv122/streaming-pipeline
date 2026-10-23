@@ -1,0 +1,122 @@
+{
+  "description": "Hand-derived from the windowing rules; derivation in README.md next to this file. Flush happens at stream time flush_now after the last event.",
+  "flush_now": 310.0,
+  "record_columns": ["emitted_at", "zone", "window_start", "revision", "final", "orders", "revenue_cents", "late_dropped"],
+  "dropped_columns": ["order_id", "zone", "window_start", "event_time", "dropped_at"],
+  "cases": {
+    "L0": {
+      "lateness_s": 0,
+      "note": "wait and revise are identical when L = 0",
+      "peak_open_windows": 4,
+      "flushed_count": 1,
+      "records": [
+        [60.5, "east", 0, 0, true, 12, 6300, 0],
+        [60.5, "north", 0, 0, true, 13, 12100, 0],
+        [60.5, "south", 0, 0, true, 12, 24600, 0],
+        [120.25, "north", 60, 0, true, 12, 12000, 1],
+        [120.25, "south", 60, 0, true, 12, 24600, 1],
+        [180.5, "east", 120, 0, true, 13, 6500, 2],
+        [180.5, "north", 120, 0, true, 12, 12000, 3],
+        [180.5, "south", 120, 0, true, 13, 25200, 1],
+        [240.5, "east", 180, 0, true, 12, 6300, 3],
+        [240.5, "north", 180, 0, true, 12, 12000, 4],
+        [240.5, "south", 180, 0, true, 12, 24600, 2],
+        [305.25, "east", 240, 0, true, 12, 6300, 3],
+        [305.25, "north", 240, 0, true, 12, 12000, 5],
+        [305.25, "south", 240, 0, true, 12, 24600, 2],
+        [310.0, "north", 300, 0, true, 1, 100, 5]
+      ],
+      "dropped": [
+        ["ord-900002", "north", 0, 50.0, 70.25],
+        ["ord-900003", "south", 0, 59.5, 75.25],
+        ["ord-900004", "east", 0, 10.0, 95.25],
+        ["ord-900007", "north", 60, 118.0, 125.25],
+        ["ord-900008", "east", 60, 100.0, 130.25],
+        ["ord-900009", "north", 60, 119.999, 155.25],
+        ["ord-900010", "south", 120, 170.0, 190.25],
+        ["ord-900011", "east", 120, 175.0, 200.25],
+        ["ord-900012", "north", 120, 130.0, 215.25],
+        ["ord-900013", "north", 180, 200.0, 245.25],
+        ["ord-900015", "south", 240, 290.0, 306.25]
+      ]
+    },
+    "L30_wait": {
+      "lateness_s": 30,
+      "peak_open_windows": 6,
+      "flushed_count": 4,
+      "records": [
+        [90.5, "east", 0, 0, true, 12, 6300, 0],
+        [90.5, "north", 0, 0, true, 14, 12400, 0],
+        [90.5, "south", 0, 0, true, 13, 24725, 0],
+        [150.5, "east", 60, 0, true, 1, 400, 1],
+        [150.5, "north", 60, 0, true, 13, 12250, 0],
+        [150.5, "south", 60, 0, true, 12, 24600, 0],
+        [210.5, "east", 120, 0, true, 14, 7300, 1],
+        [210.5, "north", 120, 0, true, 12, 12000, 1],
+        [210.5, "south", 120, 0, true, 14, 25700, 0],
+        [270.5, "east", 180, 0, true, 12, 6300, 1],
+        [270.5, "north", 180, 0, true, 13, 13100, 2],
+        [270.5, "south", 180, 0, true, 12, 24600, 0],
+        [310.0, "east", 240, 0, true, 12, 6300, 1],
+        [310.0, "north", 240, 0, true, 12, 12000, 2],
+        [310.0, "south", 240, 0, true, 13, 24800, 0],
+        [310.0, "north", 300, 0, true, 1, 100, 2]
+      ],
+      "dropped": [
+        ["ord-900004", "east", 0, 10.0, 95.25],
+        ["ord-900009", "north", 60, 119.999, 155.25],
+        ["ord-900012", "north", 120, 130.0, 215.25]
+      ]
+    },
+    "L30_revise": {
+      "lateness_s": 30,
+      "peak_open_windows": 6,
+      "flushed_count": 4,
+      "records": [
+        [60.5, "east", 0, 0, false, 12, 6300, 0],
+        [60.5, "north", 0, 0, false, 13, 12100, 0],
+        [60.5, "south", 0, 0, false, 12, 24600, 0],
+        [70.25, "north", 0, 1, false, 14, 12400, 0],
+        [75.25, "south", 0, 1, false, 13, 24725, 0],
+        [90.5, "east", 0, 1, true, 12, 6300, 0],
+        [90.5, "north", 0, 2, true, 14, 12400, 0],
+        [90.5, "south", 0, 2, true, 13, 24725, 0],
+        [120.25, "north", 60, 0, false, 12, 12000, 0],
+        [120.25, "south", 60, 0, false, 12, 24600, 0],
+        [125.25, "north", 60, 1, false, 13, 12250, 0],
+        [130.25, "east", 60, 0, false, 1, 400, 1],
+        [150.5, "east", 60, 1, true, 1, 400, 1],
+        [150.5, "north", 60, 2, true, 13, 12250, 0],
+        [150.5, "south", 60, 1, true, 12, 24600, 0],
+        [180.5, "east", 120, 0, false, 13, 6500, 1],
+        [180.5, "north", 120, 0, false, 12, 12000, 1],
+        [180.5, "south", 120, 0, false, 13, 25200, 0],
+        [190.25, "south", 120, 1, false, 14, 25700, 0],
+        [200.25, "east", 120, 1, false, 14, 7300, 1],
+        [210.5, "east", 120, 2, true, 14, 7300, 1],
+        [210.5, "north", 120, 1, true, 12, 12000, 1],
+        [210.5, "south", 120, 2, true, 14, 25700, 0],
+        [240.5, "east", 180, 0, false, 12, 6300, 1],
+        [240.5, "north", 180, 0, false, 12, 12000, 2],
+        [240.5, "south", 180, 0, false, 12, 24600, 0],
+        [245.25, "north", 180, 1, false, 13, 13100, 2],
+        [270.5, "east", 180, 1, true, 12, 6300, 1],
+        [270.5, "north", 180, 2, true, 13, 13100, 2],
+        [270.5, "south", 180, 1, true, 12, 24600, 0],
+        [305.25, "east", 240, 0, false, 12, 6300, 1],
+        [305.25, "north", 240, 0, false, 12, 12000, 2],
+        [305.25, "south", 240, 0, false, 12, 24600, 0],
+        [306.25, "south", 240, 1, false, 13, 24800, 0],
+        [310.0, "east", 240, 1, true, 12, 6300, 1],
+        [310.0, "north", 240, 1, true, 12, 12000, 2],
+        [310.0, "south", 240, 2, true, 13, 24800, 0],
+        [310.0, "north", 300, 0, true, 1, 100, 2]
+      ],
+      "dropped": [
+        ["ord-900004", "east", 0, 10.0, 95.25],
+        ["ord-900009", "north", 60, 119.999, 155.25],
+        ["ord-900012", "north", 120, 130.0, 215.25]
+      ]
+    }
+  }
+}
