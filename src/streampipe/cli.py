@@ -1,4 +1,4 @@
-"""Console entry point: `streampipe gen | replay | predict | sweep | produce | consume | bridge`."""
+"""Console entry point: `streampipe gen | replay | predict | sweep | report | produce | ...`."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from types import ModuleType
 FULL_SWEEP_OUT = Path("results/sweep.csv")
 SMALL_SWEEP_OUT = Path("results/scratch/sweep_small.csv")
 PREDICTIONS_PATH = Path("results/predictions.json")
+RESULTS_DIR = Path("results")
+REPORT_PATH = Path("results/REPORT.md")
 MAX_FAILED_SHOWN = 10
 
 MISSING_EXTRA = (
@@ -64,6 +66,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pin",
         action="store_true",
         help="also write predictions.sha256 next to the output; the registered sweep requires it",
+    )
+
+    rp = sub.add_parser("report", help="render the committed sweep results as a markdown report")
+    rp.add_argument(
+        "--results", type=Path, default=RESULTS_DIR, help=f"default {RESULTS_DIR.as_posix()}"
+    )
+    rp.add_argument(
+        "--out", type=Path, default=REPORT_PATH, help=f"default {REPORT_PATH.as_posix()}"
     )
 
     pr = sub.add_parser("produce", help="publish a log to the orders topic")
@@ -200,6 +210,18 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_report(args: argparse.Namespace) -> int:
+    from streampipe.report import write_report
+
+    try:
+        out = write_report(args.results, args.out)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        print(f"streampipe: cannot render the report from {args.results} ({e!r})", file=sys.stderr)
+        return 2
+    print(f"wrote {out}")
+    return 0
+
+
 def _import_edge(name: str) -> ModuleType | None:
     """Import a broker-facing module, or explain how to get the optional extra."""
     try:
@@ -258,6 +280,7 @@ _COMMANDS = {
     "replay": _cmd_replay,
     "sweep": _cmd_sweep,
     "predict": _cmd_predict,
+    "report": _cmd_report,
     "produce": _cmd_produce,
     "consume": _cmd_consume,
     "bridge": _cmd_bridge,
