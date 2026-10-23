@@ -128,15 +128,18 @@ def test_missing_window_is_not_exact_and_error_is_batch_count() -> None:
 
 def test_flush_records_excluded_from_latency_but_not_accuracy() -> None:
     f_south = rec("south", 0.0, 2, 200, 0, True, 500.0)  # flushed; would be latency 440
-    f_north2 = rec("north", 60.0, 4, 400, 1, True, 500.0)  # flushed final of a revised window
+    # flushed final of a revised window; its values differ from the provisional before it
+    f_north2 = rec("north", 60.0, 4, 400, 1, True, 500.0)
     records = [
         rec("north", 0.0, 3, 300, 0, True, 90.0),
         f_south,
-        rec("north", 60.0, 4, 400, 0, False, 125.0),
+        rec("north", 60.0, 3, 300, 0, False, 125.0),
         f_north2,
     ]
     m = score(sim(records, flushed=[f_south, f_north2]), TRUTH)
+    # accuracy scores the flushed final (exact), not the provisional before it (wrong)
     assert m["exact_rate_final"] == 1.0
+    assert m["exact_rate_first"] == pytest.approx(2 / 3)
     # south's only record is flushed: out of both. north@60: live first (5), flushed final.
     assert m["first_emit_latency_max"] == 30.0
     assert m["first_emit_latency_p50"] == 5.0
@@ -149,6 +152,93 @@ def test_all_flushed_gives_nan_latency() -> None:
     assert math.isnan(m["first_emit_latency_p95"])
     assert math.isnan(m["final_latency_max"])
     assert m["exact_rate_final"] == 1.0
+
+
+def test_live_metrics_skip_windows_whose_final_came_from_the_flush() -> None:
+    f_south = rec("south", 0.0, 2, 200, 0, True, 500.0)
+    f_north2 = rec("north", 60.0, 4, 400, 1, True, 500.0)  # differs from its provisional
+    records = [
+        rec("north", 0.0, 2, 200, 0, False, 62.0),  # wrong provisional
+        rec("north", 0.0, 3, 300, 1, True, 120.0),  # live, exact final
+        f_south,
+        rec("north", 60.0, 3, 300, 0, False, 125.0),  # wrong provisional
+        f_north2,
+    ]
+    m = score(sim(records, flushed=[f_south, f_north2]), TRUTH)
+    assert m["exact_rate_final"] == 1.0
+    assert m["n_flushed_windows"] == 2
+    # final-live set: north@0 only
+    assert m["n_windows_live"] == 1
+    assert m["n_exact_final_live"] == 1
+    assert m["exact_rate_final_live"] == 1.0
+    assert m["mean_abs_count_error_live"] == 0.0
+    # first-live set: north@0 and north@60 (south's first record is the flush); both first wrong
+    assert m["n_windows_first_live"] == 2
+    assert m["exact_rate_first_live"] == 0.0
+    # north@0: (2,200) -> (3,300); north@60: (3,300) -> (4,400); south has one record
+    assert m["n_value_revisions"] == 2
+    assert m["value_revisions_per_window"] == pytest.approx(2 / 3)
+    assert m["revisions_per_window"] == pytest.approx(5 / 3 - 1)
+
+
+def test_live_error_counts_a_wrong_live_final() -> None:
+    f_north2 = rec("north", 60.0, 4, 400, 0, True, 500.0)
+    records = [
+        rec("north", 0.0, 3, 300, 0, True, 90.0),
+        rec("south", 0.0, 5, 500, 0, True, 100.0),  # live, wrong by 3
+        f_north2,
+    ]
+    m = score(sim(records, flushed=[f_north2]), TRUTH)
+    assert m["n_windows_live"] == 2
+    assert m["exact_rate_final_live"] == 0.5
+    assert m["mean_abs_count_error_live"] == pytest.approx(3 / 2)
+    assert m["mean_abs_count_error"] == pytest.approx(3 / 3)
+
+
+def test_missing_window_is_live_and_not_exact() -> None:
+    m = score(sim([rec("north", 0.0, 3, 300, 0, True, 90.0)]), TRUTH)
+    assert m["n_windows_live"] == 3
+    assert m["n_windows_first_live"] == 3
+    assert m["exact_rate_final_live"] == pytest.approx(1 / 3)
+    assert m["exact_rate_first_live"] == pytest.approx(1 / 3)
+    assert m["mean_abs_count_error_live"] == pytest.approx((0 + 2 + 4) / 3)
+    assert m["n_flushed_windows"] == 0
+    assert m["n_value_revisions"] == 0
+
+
+def test_no_live_windows_gives_nan_live_rates() -> None:
+    r = rec("north", 0.0, 3, 300, 0, True, 500.0)
+    m = score(sim([r], flushed=[r]), {("north", 0.0): BatchWindow(3, 300)})
+    assert m["n_windows_live"] == 0
+    assert math.isnan(m["exact_rate_final_live"])
+    assert math.isnan(m["exact_rate_first_live"])
+    assert math.isnan(m["mean_abs_count_error_live"])
+    assert m["exact_rate_final"] == 1.0
+    assert m["n_flushed_windows"] == 1
+
+
+def test_unchanged_final_is_not_a_value_revision() -> None:
+    flushed = rec("north", 60.0, 4, 400, 1, True, 500.0)
+    records = [
+        rec("north", 0.0, 3, 300, 0, False, 62.0),
+        rec("north", 0.0, 3, 300, 1, True, 120.0),  # final repeats the provisional values
+        rec("north", 60.0, 4, 400, 0, False, 125.0),
+        flushed,  # so does the flushed final
+    ]
+    m = score(sim(records, flushed=[flushed]), {k: TRUTH[k] for k in TRUTH if k[0] == "north"})
+    assert m["n_value_revisions"] == 0
+    assert m["value_revisions_per_window"] == 0.0
+    assert m["revisions_per_window"] == 1.0  # records still count as revisions
+
+
+def test_revenue_only_change_is_a_value_revision() -> None:
+    records = [
+        rec("north", 0.0, 3, 299, 0, False, 62.0),
+        rec("north", 0.0, 3, 300, 1, True, 120.0),
+    ]
+    m = score(sim(records), {("north", 0.0): BatchWindow(3, 300)})
+    assert m["n_value_revisions"] == 1
+    assert m["value_revisions_per_window"] == 1.0
 
 
 def test_late_dropped_rate() -> None:
@@ -215,3 +305,35 @@ def test_pool_sums_counts_and_averages_records() -> None:
     assert p["n_dropped"] == 1
     with pytest.raises(ValueError, match="at least one"):
         pool([])
+
+
+def test_pool_live_metrics_are_ratios_of_sums() -> None:
+    f_north2 = rec("north", 60.0, 4, 400, 1, True, 500.0)
+    f_south = rec("south", 0.0, 2, 200, 0, True, 500.0)
+    a = score_run(
+        sim(
+            [
+                rec("north", 0.0, 2, 200, 0, False, 62.0),
+                rec("north", 0.0, 3, 300, 1, True, 120.0),
+                f_south,
+                rec("north", 60.0, 3, 300, 0, False, 125.0),
+                f_north2,
+            ],
+            flushed=[f_south, f_north2],
+        ),
+        TRUTH,
+    )
+    b = score_run(sim([rec("north", 0.0, 3, 300, 0, True, 90.0)]), TRUTH)
+    assert a.metrics["exact_rate_final_live"] == 1.0
+    assert b.metrics["exact_rate_final_live"] == pytest.approx(1 / 3)
+    p = pool([a, b])
+    # live windows: 1 + 3; exact: 1 + 1; abs error: 0 + 6
+    assert p["n_windows_live"] == 4
+    assert p["exact_rate_final_live"] == 0.5
+    assert p["mean_abs_count_error_live"] == pytest.approx(6 / 4)
+    # first-live: 2 + 3 windows, exact 0 + 1
+    assert p["exact_rate_first_live"] == pytest.approx(1 / 5)
+    # value revisions: 2 + 0 over 3 + 1 emitted windows
+    assert p["n_value_revisions"] == 2
+    assert p["value_revisions_per_window"] == 0.5
+    assert p["n_flushed_windows"] == 2

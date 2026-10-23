@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+FULL_SWEEP_OUT = Path("results/sweep.csv")
+SMALL_SWEEP_OUT = Path("results/scratch/sweep_small.csv")
+
 MISSING_EXTRA = (
     "streampipe: the Kafka client is not installed. Run `uv sync --extra kafka` and try again."
 )
@@ -34,7 +37,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sweep", help="run the evaluation grid")
     s.add_argument("--small", action="store_true", help="short smoke grid, not a finding")
-    s.add_argument("--out", type=Path, default=Path("results/sweep.csv"))
+    s.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=f"output CSV (default {FULL_SWEEP_OUT.as_posix()}; "
+        f"with --small {SMALL_SWEEP_OUT.as_posix()})",
+    )
     s.add_argument("--workers", type=int, default=1)
 
     pr = sub.add_parser("produce", help="publish a log to the orders topic")
@@ -103,13 +112,15 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     from streampipe.evalrun import FULL_GRID, SMALL_GRID, run_grid
 
     grid = SMALL_GRID if args.small else FULL_GRID
-    out = run_grid(grid, args.out, workers=args.workers)
+    target = args.out or (SMALL_SWEEP_OUT if args.small else FULL_SWEEP_OUT)
+    out = run_grid(grid, target, workers=args.workers)
     claim_path = out.with_name(f"{out.stem}_claim.json")
     claim = json.loads(claim_path.read_text(encoding="utf-8"))
     print(f"wrote {out}, {out.stem}_pooled.csv and {claim_path.name} ({grid.n_runs} runs)")
-    print(f"pre-registered claim passed: {claim['passed']}")
-    if args.small:
-        print("small grid: a code smoke test, not a finding")
+    if claim["registered_grid"]:
+        print(f"pre-registered claim passed: {claim['passed']}")
+    else:
+        print("smoke run, not the registered result")
     return 0
 
 

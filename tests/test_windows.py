@@ -188,6 +188,40 @@ def test_late_event_creates_window_with_no_prior_event() -> None:
     assert zero.dropped == [LateDrop("n", 60.0, "b", 70.0, 131.0)]
 
 
+def test_revise_window_created_when_max_equals_its_end_emits_one_provisional() -> None:
+    # M == window_end exactly: the window is due on creation, so the event's own step emits
+    # revision 0, and the due-scan that follows must not emit it a second time.
+    core = WindowCore("revise", 30)
+    items = [
+        (60.0, ev("a", 60.0, "s", 1.00)),  # M = 60 = end of [0,60)
+        (61.0, ev("b", 50.0, "n", 2.00)),  # new window [0,60) for n, created while M == 60
+        (62.0, ev("c", 55.0, "n", 4.00)),  # second event: revision 1, not a duplicate of 0
+        (90.0, ev("d", 90.0, "s", 8.00)),  # M = 90 = 60 + L closes [0,60)
+    ]
+    assert feed(core, items) == [
+        [],
+        [("n", 0.0, 0, False, 1, 200, 0, 61.0)],
+        [("n", 0.0, 1, False, 2, 600, 0, 62.0)],
+        [("n", 0.0, 2, True, 2, 600, 0, 90.0)],
+    ]
+
+
+def test_revise_window_that_becomes_due_at_max_equal_end_then_takes_event_at_same_max() -> None:
+    # [0,60) for n is open and not yet due; another zone's event moves M to exactly 60 (one
+    # provisional revision 0); an event for n arriving while M == 60 adds exactly one more.
+    core = WindowCore("revise", 30)
+    items = [
+        (10.0, ev("a", 10.0, "n", 1.00)),
+        (60.0, ev("b", 60.0, "s", 2.00)),
+        (61.0, ev("c", 50.0, "n", 4.00)),
+    ]
+    assert feed(core, items) == [
+        [],
+        [("n", 0.0, 0, False, 1, 100, 0, 60.0)],
+        [("n", 0.0, 1, False, 2, 500, 0, 61.0)],
+    ]
+
+
 @pytest.mark.parametrize("mode", ["wait", "revise"])
 def test_due_and_closed_in_same_step_emits_one_final(mode: Any) -> None:
     core = WindowCore(mode, 30)

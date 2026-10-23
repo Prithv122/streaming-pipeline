@@ -56,6 +56,29 @@ SMALL_GRID = Grid(
     duration_s=300.0,
 )
 
+
+def grid_label(grid: Grid) -> str:
+    """ "full" for the registered grid, "small" for the smoke grid, "custom" for anything else."""
+    if grid == FULL_GRID:
+        return "full"
+    if grid == SMALL_GRID:
+        return "small"
+    return "custom"
+
+
+def grid_metadata(grid: Grid) -> dict[str, Any]:
+    """The axes a result was produced from, for the claim JSON."""
+    return {
+        "n_runs": grid.n_runs,
+        "n_seeds": len(grid.seeds),
+        "duration_s": grid.duration_s,
+        "late_shares": list(grid.late_shares),
+        "max_delays": list(grid.max_delays),
+        "lateness": list(grid.lateness),
+        "modes": list(grid.modes),
+    }
+
+
 CLAIM = {
     "mode": "wait",
     "lateness_s": 30.0,
@@ -135,8 +158,12 @@ def pooled_table(rows: Sequence[RunRow]) -> list[dict[str, Any]]:
     return table
 
 
-def evaluate_claim(pooled: Sequence[dict[str, Any]]) -> dict[str, Any]:
-    """Mechanically check the pre-registered claim against the pooled table."""
+def evaluate_claim(pooled: Sequence[dict[str, Any]], grid: Grid | None = None) -> dict[str, Any]:
+    """Mechanically check the pre-registered claim against the pooled table.
+
+    `registered_grid` is true only when `grid` is `FULL_GRID`, the grid the claim was registered
+    on. For any other grid the pass/fail values are a smoke check, not the registered result.
+    """
     cell = next(
         (
             p
@@ -151,6 +178,7 @@ def evaluate_claim(pooled: Sequence[dict[str, Any]]) -> dict[str, Any]:
     out: dict[str, Any] = {
         "cell": {k: CLAIM[k] for k in ("mode", "lateness_s", "late_share", "max_delay_s")},
         "cell_present": cell is not None,
+        "registered_grid": grid is not None and grid == FULL_GRID,
     }
     exact = cell["exact_rate_final"] if cell else math.nan
     p95 = cell["first_emit_latency_p95"] if cell else math.nan
@@ -207,7 +235,9 @@ def run_grid(grid: Grid, out_csv: Path | str, workers: int = 1) -> Path:
         (*CELL_COLUMNS, "n_seeds", *METRIC_KEYS),
         pooled,
     )
-    claim = evaluate_claim(pooled)
+    claim = evaluate_claim(pooled, grid)
+    claim["grid"] = grid_label(grid)
+    claim["grid_config"] = grid_metadata(grid)
     claim_path = out.with_name(f"{out.stem}_claim.json")
     claim_path.write_text(json.dumps(claim, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return out

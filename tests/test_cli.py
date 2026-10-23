@@ -14,7 +14,7 @@ def test_parser_defaults_and_required_args() -> None:
     args = p.parse_args(["replay", "--log", "x.jsonl", "--mode", "revise", "--lateness", "15"])
     assert (args.mode, args.lateness, args.out) == ("revise", 15.0, None)
     args = p.parse_args(["sweep", "--small"])
-    assert args.small and args.out == Path("results/sweep.csv")
+    assert args.small and args.out is None
     args = p.parse_args(["consume"])
     assert args.bootstrap == "localhost:19092"
     assert (args.topic_in, args.topic_out, args.group_id) == (
@@ -62,7 +62,41 @@ def test_sweep_small(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     assert out.exists()
     assert (tmp_path / "res" / "sweep_pooled.csv").exists()
     assert (tmp_path / "res" / "sweep_claim.json").exists()
-    assert "claim passed" in capsys.readouterr().out
+    text = capsys.readouterr().out
+    assert "smoke run, not the registered result" in text
+    assert "claim passed" not in text
+
+
+def test_sweep_small_defaults_to_scratch_never_the_registered_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["sweep", "--small"]) == 0
+    scratch = tmp_path / "results" / "scratch"
+    assert (scratch / "sweep_small.csv").exists()
+    assert (scratch / "sweep_small_pooled.csv").exists()
+    assert (scratch / "sweep_small_claim.json").exists()
+    assert not (tmp_path / "results" / "sweep.csv").exists()
+    assert list((tmp_path / "results").glob("sweep*")) == []
+    claim = json.loads((scratch / "sweep_small_claim.json").read_text())
+    assert (claim["grid"], claim["registered_grid"]) == ("small", False)
+    assert "smoke run, not the registered result" in capsys.readouterr().out
+
+
+def test_sweep_full_grid_defaults_to_results_and_reports_the_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from streampipe import evalrun
+
+    # A tiny stand-in for the registered grid, so the test stays fast.
+    tiny = evalrun.Grid((0.05,), (30.0,), (30.0,), ("wait",), (0,), duration_s=120.0)
+    monkeypatch.setattr(evalrun, "FULL_GRID", tiny)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["sweep"]) == 0
+    assert (tmp_path / "results" / "sweep.csv").exists()
+    claim = json.loads((tmp_path / "results" / "sweep_claim.json").read_text())
+    assert (claim["grid"], claim["registered_grid"]) == ("full", True)
+    assert "pre-registered claim passed" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

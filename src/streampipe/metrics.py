@@ -6,6 +6,7 @@ import math
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 
 from streampipe.batch import BatchWindow
 from streampipe.sim import SimResult
@@ -34,6 +35,17 @@ METRIC_KEYS: tuple[str, ...] = (
     "n_dropped",
     "n_emitted_windows",
     "abs_count_error_sum",
+    "exact_rate_final_live",
+    "exact_rate_first_live",
+    "mean_abs_count_error_live",
+    "value_revisions_per_window",
+    "n_flushed_windows",
+    "n_windows_live",
+    "n_windows_first_live",
+    "n_exact_final_live",
+    "n_exact_first_live",
+    "abs_count_error_sum_live",
+    "n_value_revisions",
 )
 
 
@@ -73,8 +85,19 @@ def _is_exact(record: WindowResult | None, truth: BatchWindow) -> bool:
     )
 
 
+def _ratio(num: float, den: float) -> float:
+    return num / den if den else math.nan
+
+
 def score_run(result: SimResult, truth: dict[Key, BatchWindow]) -> RunScore:
-    """Score one run. Accuracy covers every batch window; latency skips flush-produced records."""
+    """Score one run. Accuracy covers every batch window; latency skips flush-produced records.
+
+    The `*_live` accuracy metrics also skip flush-produced records: `exact_rate_final_live` and
+    `mean_abs_count_error_live` cover the batch windows whose final record did not come from the
+    end-of-stream flush, `exact_rate_first_live` those whose first record did not. A batch window
+    with no streaming record counts as live and not exact. `value_revisions_per_window` counts
+    records that changed `(orders, revenue_cents)` against the same window's previous record.
+    """
     flushed_ids = {(r.zone, r.window_start, r.revision) for r in result.flushed}
     by_window: dict[Key, list[WindowResult]] = defaultdict(list)
     for r in result.records:
@@ -84,23 +107,46 @@ def score_run(result: SimResult, truth: dict[Key, BatchWindow]) -> RunScore:
     final: dict[Key, WindowResult] = {}
     first_lat: list[float] = []
     final_lat: list[float] = []
+    first_flushed: set[Key] = set()
+    final_flushed: set[Key] = set()
+    n_value_revisions = 0
     for key, recs in by_window.items():
         recs.sort(key=lambda r: r.revision)
         first[key] = recs[0]
         final[key] = next((r for r in recs if r.final), recs[-1])
         if (key[0], key[1], recs[0].revision) not in flushed_ids:
             first_lat.append(recs[0].emitted_at - recs[0].window_end)
+        else:
+            first_flushed.add(key)
         fin = final[key]
         if (key[0], key[1], fin.revision) not in flushed_ids:
             final_lat.append(fin.emitted_at - fin.window_end)
+        else:
+            final_flushed.add(key)
+        n_value_revisions += sum(
+            (a.orders, a.revenue_cents) != (b.orders, b.revenue_cents) for a, b in pairwise(recs)
+        )
 
     n_windows = len(truth)
     n_exact_final = n_exact_first = 0
     abs_err = 0
+    n_windows_live = n_windows_first_live = 0
+    n_exact_final_live = n_exact_first_live = 0
+    abs_err_live = 0
     for key, tw in truth.items():
-        n_exact_final += _is_exact(final.get(key), tw)
-        n_exact_first += _is_exact(first.get(key), tw)
-        abs_err += abs(final[key].orders - tw.orders) if key in final else tw.orders
+        exact_final = _is_exact(final.get(key), tw)
+        exact_first = _is_exact(first.get(key), tw)
+        err = abs(final[key].orders - tw.orders) if key in final else tw.orders
+        n_exact_final += exact_final
+        n_exact_first += exact_first
+        abs_err += err
+        if key not in final_flushed:
+            n_windows_live += 1
+            n_exact_final_live += exact_final
+            abs_err_live += err
+        if key not in first_flushed:
+            n_windows_first_live += 1
+            n_exact_first_live += exact_first
 
     n_emitted_windows = len(by_window)
     records_emitted = len(result.records)
@@ -130,6 +176,19 @@ def score_run(result: SimResult, truth: dict[Key, BatchWindow]) -> RunScore:
         "n_dropped": float(n_dropped),
         "n_emitted_windows": float(n_emitted_windows),
         "abs_count_error_sum": float(abs_err),
+        "exact_rate_final_live": _ratio(n_exact_final_live, n_windows_live),
+        "exact_rate_first_live": _ratio(n_exact_first_live, n_windows_first_live),
+        "mean_abs_count_error_live": _ratio(abs_err_live, n_windows_live),
+        "value_revisions_per_window": (
+            n_value_revisions / n_emitted_windows if n_emitted_windows else 0.0
+        ),
+        "n_flushed_windows": float(len({(r.zone, r.window_start) for r in result.flushed})),
+        "n_windows_live": float(n_windows_live),
+        "n_windows_first_live": float(n_windows_first_live),
+        "n_exact_final_live": float(n_exact_final_live),
+        "n_exact_first_live": float(n_exact_first_live),
+        "abs_count_error_sum_live": float(abs_err_live),
+        "n_value_revisions": float(n_value_revisions),
     }
     return RunScore(metrics, first_lat, final_lat)
 
@@ -181,4 +240,17 @@ def pool(runs: Sequence[RunScore]) -> dict[str, float]:
         "n_dropped": total("n_dropped"),
         "n_emitted_windows": n_emitted,
         "abs_count_error_sum": total("abs_count_error_sum"),
+        "exact_rate_final_live": _ratio(total("n_exact_final_live"), total("n_windows_live")),
+        "exact_rate_first_live": _ratio(total("n_exact_first_live"), total("n_windows_first_live")),
+        "mean_abs_count_error_live": _ratio(
+            total("abs_count_error_sum_live"), total("n_windows_live")
+        ),
+        "value_revisions_per_window": total("n_value_revisions") / n_emitted if n_emitted else 0.0,
+        "n_flushed_windows": total("n_flushed_windows"),
+        "n_windows_live": total("n_windows_live"),
+        "n_windows_first_live": total("n_windows_first_live"),
+        "n_exact_final_live": total("n_exact_final_live"),
+        "n_exact_first_live": total("n_exact_first_live"),
+        "abs_count_error_sum_live": total("abs_count_error_sum_live"),
+        "n_value_revisions": total("n_value_revisions"),
     }
