@@ -25,7 +25,7 @@ def test_parser_defaults_and_required_args() -> None:
     assert args.pin is False
     assert p.parse_args(["predict", "--pin"]).pin is True
     args = p.parse_args(["consume"])
-    assert args.bootstrap == "localhost:19092"
+    assert args.bootstrap == "127.0.0.1:19092"
     assert (args.topic_in, args.topic_out, args.group_id) == (
         "orders.v1",
         "windows.v1",
@@ -281,4 +281,4 @@ def test_bridge_passes_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_import_edge", lambda name: FakeBridge)
     assert cli.main(["bridge"]) == 0
     assert calls["token"] == "secret"
-    assert calls["bootstrap"] == "localhost:19092"
+    assert calls["bootstrap"] == "127.0.0.1:19092"

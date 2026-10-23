@@ -78,14 +78,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser("produce", help="publish a log to the orders topic")
     pr.add_argument("--log", type=Path, required=True)
-    pr.add_argument("--bootstrap", default="localhost:19092")
+    pr.add_argument("--bootstrap", default="127.0.0.1:19092")
     pr.add_argument("--topic", default="orders.v1")
     pr.add_argument("--pace", type=float, default=None, help="log seconds per wall second")
 
     c = sub.add_parser("consume", help="window the orders topic into the windows topic")
     c.add_argument("--mode", choices=("wait", "revise"), default="wait")
     c.add_argument("--lateness", type=float, default=30.0)
-    c.add_argument("--bootstrap", default="localhost:19092")
+    c.add_argument("--bootstrap", default="127.0.0.1:19092")
     c.add_argument("--topic-in", default="orders.v1")
     c.add_argument("--topic-out", default="windows.v1")
     c.add_argument("--group-id", default="streampipe")
@@ -93,7 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     c.add_argument("--max-events", type=int, default=None)
 
     b = sub.add_parser("bridge", help="forward the windows topic to the dashboard hub")
-    b.add_argument("--bootstrap", default="localhost:19092")
+    b.add_argument("--bootstrap", default="127.0.0.1:19092")
     b.add_argument("--url", default="http://127.0.0.1:8000/publish/windows")
     b.add_argument("--topic", default="windows.v1")
     b.add_argument("--idle-timeout", type=float, default=10.0)

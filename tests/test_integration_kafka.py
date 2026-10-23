@@ -20,7 +20,7 @@ from streampipe.kafka_io import (
 )
 from streampipe.windows import WindowCore
 
-BOOTSTRAP = "localhost:19092"
+BOOTSTRAP = "127.0.0.1:19092"
 
 pytestmark = pytest.mark.integration
 
