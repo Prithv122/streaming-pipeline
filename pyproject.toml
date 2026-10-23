@@ -1,0 +1,46 @@
+[project]
+name = "streaming-pipeline"
+version = "0.1.0"
+description = "Order stream to 60 s windows per zone, with a measured answer to how long to wait for late events"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+# The broker edge only. The windowing core, simulator and sweep never import it,
+# so CI and the tests run without a broker or this package.
+kafka = ["confluent-kafka==2.16.0"]
+
+# Console entry points need a real build backend: a uv virtual project
+# ([tool.uv] package = false) installs nothing, so the documented command fails
+# with "No module named ..." even while tests pass (pytest's pythonpath hides it).
+[project.scripts]
+streampipe = "streampipe.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Keep this path and the [project.scripts] target above in step when renaming the package.
+[tool.hatch.build.targets.wheel]
+packages = ["src/streampipe"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.9",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["integration: needs a running Redpanda broker (docker compose up); deselected in CI"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
