@@ -146,3 +146,25 @@ after results are seen.
 **A1.5 Process.** A fresh-context reviewer checks `ANALYTIC.md`, `analytic.py`, the predictions and
 the evaluation code before the registered sweep runs. Amendment 1, the predictions and the reviewed
 code are committed first.
+
+**A1.6 Changes after the second pre-run review (same day, before any registered run).** The review
+found no correctness error. It reproduced 20 predictions with independent quadrature (largest P1
+gap: 0.5 events against tolerances of 94 or more). It also confirmed that plausible bugs would fail
+the claim. Changes, all made before any registered run, and none informed by data:
+- **P2 uses exact count regions** from the model's distribution, at the same per-tail level as a
+  ±4σ normal check (`ANALYTIC.md` §6). The normal rule had a 0.46 % false-failure rate at
+  (20 %, 120 s), where the expected count is 0.66.
+- **P0 added:** the pooled event count must match Poisson(103,500).
+- **P4 added:** wait-mode `exact_rate_final_live` per cell, predicted by `ANALYTIC.md` §4b and checked
+  with the same exact regions. This covers the headline final-accuracy metric.
+- **Invariant checks are now explicit:** revise must equal wait on drop counts and live final-exact
+  counts, with no tolerance.
+- **Correction to A1.2's wording.** The evaluator checks P3-revise at every `L` (45 checks, all
+  against the same 9 predictions), not 9. The claim passes iff every P0, P1, P2, P3, P4 and
+  invariant check passes.
+- **Correction to A1.4.** The stress-regime sentence "exactness is near 0 at every `L`" is withdrawn.
+  The model's own values (P4) replace it.
+- **Disclosure.** About 300 mechanical checks carry about 45 independent tests. The false-failure
+  probability if the model is right is about 0.5 % overall (`ANALYTIC.md` §6).
+- **Integrity.** `results/predictions.sha256` pins the predictions file. The registered sweep refuses
+  to run if the file is missing or its hash differs.

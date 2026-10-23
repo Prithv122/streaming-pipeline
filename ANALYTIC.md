@@ -100,8 +100,32 @@ q(e) = ∫_e^∞ c(e, x)·g(x) dx,       predicted exact_rate_first_live  π = m
 This does not depend on `L`. Revise's first record goes out when the window is due, whatever the
 budget.
 
-Ignored, each with probability below `10⁻⁶`: a window with no events (`exp(−50)`); a window
-none of whose events has arrived by `τ*`; exact ties in arrival time.
+Ignored, each with probability below `10⁻⁶`: a window with no events (`exp(−50)`), and a
+window none of whose events has arrived by `τ*`.
+
+**Ties are not negligible in frequency, only in effect.** Arrival times are rounded to the
+millisecond, so about 0.5–2 % of events share a millisecond with another event. The log then
+orders them by `order_id`, which processes the earlier event time first. A tie matters only when it
+pairs the event that moves `M` past a threshold with a window event or a drop candidate, about
+`10⁻³` per window. It always favours "included" and "not dropped". Bound (second pre-run review):
+at most about 0.1 % relative on P1 (about 0.1 drops per run), `5·10⁻⁴` absolute on P2 and P4, and
+0.5 ms on P3. That is far inside every tolerance. Rounding event times to the millisecond is
+likewise negligible.
+
+## 4b. P4: wait mode, final answer exact
+
+In wait mode, a window's events that arrive after `σ` (the first arrival of an event with event
+time `≥ e + L`) are dropped, and every earlier one is accepted. So the final record is exact iff no
+window event arrives after `σ`. This is §4 with `A(e + L, ·)` in place of `A(e, ·)`:
+
+```
+q4(e) = ∫_{e+L}^∞ exp(−μ(e, x))·a(e + L, x)·exp(−A(e + L, x)) dx,
+predicted exact_rate_final_live  π4 = mean of q4(e) over live windows (e ≤ T − W, e + L < T)
+```
+
+At `L = 0` this is the same quantity as P2. When `L ≥ Y` (or `p = 0` and `L ≥ J`), no window
+event can arrive after `σ`, so `π4 = 1` exactly. Revise mode accepts the same events, so its
+final exactness is the same, and that is checked as an invariant.
 
 ## 5. P3: first-emit latency
 
@@ -121,9 +145,14 @@ mixture `H(y) = mean over live e of P(τ_L − e ≤ y)`. The prediction is the 
 
 ## 6. Tolerances (fixed with the predictions, before the sweep)
 
-The observed values pool 5 seeds. Every tolerance is a model-derived spread at 4 standard
-deviations. None was chosen by looking at data.
+The observed values pool 5 seeds. Every acceptance rule comes from the model at the level of a
+two-sided normal ±4σ check (`α = 3.167·10⁻⁵` per tail). None was chosen by looking at data. The
+second pre-run review replaced P2's normal rule with exact count regions, and added P0 and P4
+(see `EVAL_PLAN.md` A1.6).
 
+- **P0, event count.** Total events over the 5 seeds is Poisson(`S·E[N]` = 103,500). Pass iff it
+  lies within `103,500 ± 4·√103,500` (rounded outward). Event times do not depend on the cell, so
+  this is one test repeated in every (late share, max delay) cell. It catches rate and burst bugs.
 - **P1, drops, per (late share, max delay, L) cell.** `D` = observed dropped events over 5 seeds,
   `N` = observed events, expected drops `Ê = ρ·N`. Pass iff `|D − Ê| ≤ 4·√(2·Ê) + 2`. The factor 2
   allows up to twice the Poisson variance for drops that share the same `M` path. The `+2` covers
@@ -137,13 +166,49 @@ deviations. None was chosen by looking at data.
   ```
 
   with `E[c]`, `E[c²]` integrated against `g` as in §4. Windows are treated as independent of each
-  other. Pass iff `|π̂ − π| ≤ 4·√Var(π̂)`.
+  other. This `sd` is reported, but **the pass rule uses the exact count distribution instead**.
+  The count of exact window-zones `X` is the convolution, over all live windows and seeds, of the
+  mixture pmf `P_e(k) = ∫ C(Z,k)·c^k·(1 − c)^(Z−k)·g(x) dx`. Pass iff the observed denominator
+  equals `n_expected = S·Z·n_live` and `X` lies in `[lo, hi]`, the tightest region with at most `α`
+  of the model's mass below and above. A normal rule was wrong at (20 %, 120 s): with `π = 0.00037`
+  the expected count is 0.66, and "±4σ" would have failed 0.46 % of the time when the model is right.
+- **P4, wait-mode final exactness, per (late share, max delay, L) cell.** The same exact-region
+  rule, using §4b's mixture. Cells with `π4 = 1` exactly must have every live window exact.
 - **P3, first-emit latency p95, per cell**: wait at every `L`, and revise at each (late share, max
   delay). Nearest-rank p95 over `n = S·Z·n_live` values, but only `S·n_live` of them are
   independent, because zones share `τ_L`. Asymptotic standard error
   `√(0.95·0.05 / (S·n_live)) / h(H⁻¹(0.95))`, with `h = H′` the mixture density. Pass iff
   `|p95̂ − p95| ≤ max(4·SE, 0.05 s)`. The 0.05 s floor covers rounding to the millisecond and the
-  nearest-rank step.
+  nearest-rank step. Latency is right-skewed, so the exact order-statistic tail is heavier than
+  normal: about `1.5·10⁻⁴` false-failure per cell, about 2.4× nominal. This was accepted.
+- **Invariants (no tolerance).** Revise and wait must have identical drop counts, and identical
+  live final-exact counts and denominators, in every cell.
+
+**How much independent evidence the checks carry.** For a seed, the event times, zones and amounts
+are the same in every cell. The late flags are the same for a given late share, and the on-time
+delays are the same in every cell. As a result:
+- rows with `p = 0` are identical across max delay;
+- P3 barely changes across max delay when `p > 0`;
+- P2 and P3-revise repeat across `L`, and P3-revise equals P3-wait at `L = 0`;
+- P4 at `L = 0` equals P2;
+- exact-zero P1 cells and `π4 = 1` cells are deterministic;
+- invariants are deterministic.
+
+Of the roughly 300 mechanical checks, about 45 carry independent statistical content.
+
+**False-failure probability if the model is exactly right**, from the second pre-run review's
+exact calculations:
+
+| Family | Probability |
+|---|---|
+| P1 | about `10⁻⁵` |
+| P2 and P4 with exact regions | `1.25·10⁻³` summed over the 42 distinct cells (`p_fail_model` in the predictions file) |
+| P3 | about 0.2–0.5 % in total |
+| Overall | about 0.35–0.6 % |
+
+The claim's falsifiability rests on the other side: plausible core, generator or metric bugs shift a
+family well past its region. Examples are a per-zone `M`, a revise first record sent at close, latency
+measured from the window start, a burst rate inverted, or late delays drawn from 0.
 
 ## 7. Numerical method
 
@@ -151,8 +216,8 @@ All `A`, `a`, `μ` and `G` terms are closed form. Two integrals are numerical:
 
 - the double integral for `E[D]`, on a midpoint grid in `t` within each window and in `d` within
   each delay component;
-- the one-dimensional integrals over `x` (P2) and `y` (P3), on a midpoint grid with an upper limit
-  where `exp(−A) < 10⁻¹²`.
+- the one-dimensional integrals over `x` (P2, P4) and `y` (P3), on a midpoint grid with an upper limit
+  where `exp(−A) < 10⁻¹²`. The count regions convolve the per-window pmfs exactly.
 
 Windows with the same position in the 600 s burst period and the same distance from `T` give
 identical integrals, so each distinct window type is computed once. Every grid is refined until
