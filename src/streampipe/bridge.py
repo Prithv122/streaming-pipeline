@@ -1,7 +1,9 @@
 """Bridge windows.v1 to the live dashboard hub (29-websocket-live) over HTTP.
 
-Hub contract: `POST /publish/{channel}` with body `{"type": str, "data": {}}` answers 202
+Hub contract: `POST /publish/{channel}` with body `{"type": "event", "data": {}}` answers 202
 `{"seq": n}`; when the hub has PUBLISH_TOKEN set, requests carry `Authorization: Bearer <token>`.
+The hub accepts only `type: "event"` (other types are its own control messages); the `windows`
+channel is what marks the payload as a window record.
 Standard library only on the HTTP side; the Kafka client is imported lazily by `kafka_io`.
 """
 
@@ -27,7 +29,7 @@ class PublishError(RuntimeError):
 
 
 def to_envelope(result: WindowResult) -> dict[str, Any]:
-    return {"type": "window", "data": result.to_dict()}
+    return {"type": "event", "data": result.to_dict()}
 
 
 def publish_http(

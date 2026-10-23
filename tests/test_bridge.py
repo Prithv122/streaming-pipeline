@@ -31,7 +31,7 @@ def make_result(**kw) -> WindowResult:
 def test_envelope_shape():
     r = make_result()
     env = to_envelope(r)
-    assert env == {"type": "window", "data": r.to_dict()}
+    assert env == {"type": "event", "data": r.to_dict()}
     assert set(env) == {"type", "data"}
     json.dumps(env)  # serialisable as is
 
@@ -120,7 +120,7 @@ def test_publish_other_errors_raise(status):
 def test_publish_unreachable_hub_raises_clear_error():
     # Port 9 (discard) on loopback is closed on a normal machine: connection refused.
     with pytest.raises(PublishError, match="could not reach hub"):
-        publish_http("http://127.0.0.1:9/publish/windows", {"type": "window", "data": {}}, None, 1)
+        publish_http("http://127.0.0.1:9/publish/windows", {"type": "event", "data": {}}, None, 1)
 
 
 # --- run_bridge loop ---------------------------------------------------------------------------

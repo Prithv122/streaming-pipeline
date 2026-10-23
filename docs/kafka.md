@@ -145,6 +145,6 @@ Two fixes were needed on the first broker run:
 ## Bridge to the dashboard hub
 
 `bridge.run_bridge` reads `windows.v1` and POSTs each record to the hub as
-`{"type": "window", "data": {...WindowResult...}}`, with `Authorization: Bearer <token>` when a
+`{"type": "event", "data": {...WindowResult...}}` on the `windows` channel, with `Authorization: Bearer <token>` when a
 token is given (`PUBLISH_TOKEN`, the hub's setting). It stops after the idle timeout and raises on
 the first 4xx/5xx, so a wrong token fails loudly instead of dropping records.

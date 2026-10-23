@@ -68,6 +68,20 @@ Working notes: what broke, what was tried, why X over Y.
 
 ---
 
+### 2026-10-23 — bridge envelope fixed against the real hub
+
+- The bridge posted `{"type": "window"}`. The real hub accepts only `type: "event"` and answered
+  422, so the first record would have stopped the bridge. The bridge tests used a stub that
+  accepted any body, so they could not catch it. The envelope is now `{"type": "event"}`, and the
+  `windows` channel marks the payload as a window record, as `orders` marks an order.
+- Checked end to end: a 600 s seeded log went produce → consume (revise, `L = 30`) → bridge →
+  hub. The bridge forwarded 176 records, the same count the simulator emits for that log, and the
+  dashboard's rows matched the simulator's records.
+- Lesson: a stub that accepts everything tests the HTTP call, not the contract. The contract
+  check needs the real receiver, at least once.
+
+---
+
 ## Rejected approaches
 
 | Approach | Why rejected |
@@ -82,5 +96,4 @@ Working notes: what broke, what was tried, why X over Y.
 
 - [x] Broker run done 2026-10-23: the gate passed in all four runs (see the log entry above and
       `docs/kafka.md`).
-- [ ] Dashboard integration with `29-websocket-live` (the bridge posts `type: "window"`). The hub
-      needs a renderer for that type.
+- [x] Dashboard integration with `29-websocket-live`, done 2026-10-23 (see the log entry above).
