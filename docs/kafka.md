@@ -144,6 +144,7 @@ Two fixes were needed on the first broker run:
 
 ## Bridge to the dashboard hub
 
+The hub is project #29, [websocket-live](https://github.com/Prithv122/websocket-live).
 `bridge.run_bridge` reads `windows.v1` and POSTs each record to the hub as
 `{"type": "event", "data": {...WindowResult...}}` on the `windows` channel, with `Authorization: Bearer <token>` when a
 token is given (`PUBLISH_TOKEN`, the hub's setting). It stops after the idle timeout and raises on

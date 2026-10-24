@@ -61,7 +61,8 @@ flowchart LR
 - **`sim.py` + `metrics.py` + `evalrun.py`**: replay a log with the arrival time as the clock, score
   every window against a batch group-by of the same log, and run the pre-registered grid.
 - **`kafka_io.py` + `bridge.py`**: the same core behind a Redpanda topic, and a bridge that posts
-  results to the WebSocket hub from `29-websocket-live` (`POST /publish/windows`). The broker path
+  results to the WebSocket hub from project #29, [websocket-live](https://github.com/Prithv122/websocket-live)
+  (`POST /publish/windows`). The broker path
   is a correctness check; latency comes from the simulator ([docs/kafka.md](docs/kafka.md)).
 
 ## 4. Key decisions & tradeoffs
